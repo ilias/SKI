@@ -21,6 +21,11 @@ using SKI;
 
 var env = new Dictionary<string, Expr>(StringComparer.Ordinal);
 
+// Auto-load init.ski from the same directory as the executable (or cwd).
+var initPath = FindInitFile();
+if (initPath is not null)
+    LoadFile(initPath, env, silent: true);
+
 if (args.Length > 0)
 {
     RunLine(string.Concat(args), env);
@@ -31,8 +36,11 @@ else
     Console.WriteLine("Syntax : (expr expr) for application");
     Console.WriteLine("Atoms  : S  K  I  B  C  W  Y  <Name>");
     Console.WriteLine("Define : Name = expr");
+    Console.WriteLine("Load   : :load <file.ski>");
     Console.WriteLine("Rules  : I x=x  K x y=x  S x y z=(xz)(yz)");
     Console.WriteLine("         B x y z=x(yz)  C x y z=xzy  W x y=xyy  Y f=f(Yf)");
+    if (initPath is not null)
+        Console.WriteLine($"Loaded : {initPath}");
     Console.WriteLine("Type 'exit' to quit.\n");
     while (true)
     {
@@ -42,7 +50,20 @@ else
             break;
         if (string.IsNullOrWhiteSpace(line))
             continue;
-        RunLine(line.Trim(), env);
+        var trimmed = line.Trim();
+
+        // :load <path>
+        if (trimmed.StartsWith(":load", StringComparison.OrdinalIgnoreCase))
+        {
+            var path = trimmed[5..].Trim();
+            if (path.Length == 0)
+                Console.WriteLine("  Usage: :load <file.ski>");
+            else
+                LoadFile(path, env, silent: false);
+            continue;
+        }
+
+        RunLine(trimmed, env);
     }
 }
 
@@ -89,6 +110,63 @@ static void RunLine(string input, Dictionary<string, Expr> env)
 static bool IsIdent(string s) =>
     s.Length > 0 && char.IsLetter(s[0]) &&
     s.All(c => char.IsLetterOrDigit(c) || c == '_');
+
+/// <summary>Loads and executes every non-blank, non-comment line in a .ski file.</summary>
+static void LoadFile(string path, Dictionary<string, Expr> env, bool silent)
+{
+    if (!File.Exists(path))
+    {
+        Console.WriteLine($"  Error  : File not found: '{path}'");
+        return;
+    }
+    int defined = 0, errors = 0;
+    foreach (var raw in File.ReadLines(path))
+    {
+        var line = raw.Trim();
+        if (line.Length == 0 || line.StartsWith('#')) continue;
+        try
+        {
+            // Only definitions are expected in library files.
+            var eqIdx = line.IndexOf('=');
+            if (eqIdx > 0)
+            {
+                var namePart = line[..eqIdx].Trim();
+                if (IsIdent(namePart))
+                {
+                    if (Combinators.IsBuiltin(namePart))
+                        throw new InvalidOperationException($"Cannot redefine built-in combinator '{namePart}'.");
+                    var bodyPart = line[(eqIdx + 1)..].Trim();
+                    var bodyTokens = Lexer.Tokenize(bodyPart);
+                    var body = Parser.Parse(bodyTokens, env);
+                    if (bodyTokens.Count > 0)
+                        throw new FormatException("Unexpected tokens after definition body.");
+                    env[namePart] = body;
+                    if (!silent) Console.WriteLine($"  Defined {namePart} = {body}");
+                    defined++;
+                    continue;
+                }
+            }
+            // Non-definition lines in a file: evaluate and print.
+            RunLine(line, env);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  Error  : {path}: {ex.Message}");
+            errors++;
+        }
+    }
+    if (!silent)
+        Console.WriteLine($"  Loaded {path} — {defined} definition(s){(errors > 0 ? $", {errors} error(s)" : "")}");
+}
+
+/// <summary>Searches for init.ski next to the exe, then in the working directory.</summary>
+static string? FindInitFile()
+{
+    var exeDir = Path.GetDirectoryName(Environment.ProcessPath ?? string.Empty) ?? string.Empty;
+    foreach (var candidate in new[] { Path.Combine(exeDir, "init.ski"), "init.ski" })
+        if (File.Exists(candidate)) return candidate;
+    return null;
+}
 
 namespace SKI
 {

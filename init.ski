@@ -1,0 +1,77 @@
+# SKI standard library - loaded automatically at startup.
+# Lines starting with # are comments. Blank lines are ignored.
+# Syntax: Name = expr   (expr uses strictly binary (f x) notation)
+
+# -- Aliases for builtins -----------------------------------------------------
+ID      = I
+CONST   = K
+COMPOSE = B
+FLIP    = C
+DUP     = W
+FIX     = Y
+
+# -- Boolean Church encoding --------------------------------------------------
+# TRUE  x y = x    (select first)
+# FALSE x y = y    (select second)
+TRUE    = K
+FALSE   = (K I)
+
+# NOT p x y = p y x  =>  NOT = C
+# Verify: C TRUE x y = TRUE y x = K y x = y = FALSE x y
+NOT     = C
+
+# AND p q = p q FALSE  =>  AND = ((S S) (K FALSE))
+# Verify: S S (K FALSE) p q = S p FALSE q = p q (FALSE q) = p q FALSE
+AND     = ((S S) (K FALSE))
+
+# OR p q = p TRUE q  =>  OR = ((S I) (K TRUE))
+# Verify: S I (K TRUE) p = p TRUE;  (p TRUE) q
+OR      = ((S I) (K TRUE))
+
+# IF b t e = b t e  (b is already a selector)
+IF      = I
+
+# -- Church pairs (Vireo) -----------------------------------------------------
+# PAIR a b f = f a b
+# Derivation: PAIR = ((B C) ((B (S I)) K))
+# Verify: B(SI)K a = SI(Ka);  C(SI(Ka)) b f = SI(Ka) f b;
+#         SI(Ka) f = f a;  then applied to b: f a b
+PAIR    = ((B C) ((B (S I)) K))
+
+# FST p = p TRUE  =>  FST = ((S I) (K TRUE))
+FST     = ((S I) (K TRUE))
+
+# SND p = p FALSE  =>  SND = ((S I) (K FALSE))
+SND     = ((S I) (K FALSE))
+
+# -- Church numerals ----------------------------------------------------------
+# n f x = f applied n times to x
+ZERO    = (K I)
+ONE     = I
+
+# SUCC = (S B)  --  S B n f x = B f (n f) x = f (n f x)
+SUCC    = (S B)
+TWO     = ((S B) I)
+THREE   = ((S B) ((S B) I))
+FOUR    = ((S B) ((S B) ((S B) I)))
+
+# ADD = ((B S) (B B))
+# Verify: B S (B B) m n f x = S(B B m) n f x = B B m f (n f) x
+#       = B(mf)(nf) x = mf(nfx) = m f (n f x)
+ADD     = ((B S) (B B))
+
+# MUL = B  --  B m n f = m (n f) : apply f n times, then m times
+MUL     = B
+
+# ISZERO n = n (K FALSE) TRUE
+# Derivation: C (S I (K (K FALSE))) TRUE
+# K(KFALSE) is constant so SI(K(KFALSE)) n = n (K FALSE)
+ISZERO  = ((C ((S I) (K (K FALSE)))) TRUE)
+
+# -- Function utilities -------------------------------------------------------
+# TWICE f x = f (f x)  =  W B
+# W B f = B f f = f . f;  (W B f) x = f(f x)
+TWICE   = (W B)
+
+# APPLY f x = f x
+APPLY   = I
