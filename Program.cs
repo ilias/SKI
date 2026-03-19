@@ -1,33 +1,38 @@
 ﻿// SKI(BCWY) Combinator Calculus Interpreter
-// Grammar (prefix/bracket notation):
-//   expr = 'S' | 'K' | 'I' | 'B' | 'C' | 'W' | 'Y' | '(' expr expr ')'
-// Example input: ((S K) K)   →  I
+// Grammar:
+//   line = Name '=' expr      (definition)
+//        | expr               (reduction)
+//   expr = ATOM | '(' expr expr ')'
+//   ATOM = S | K | I | B | C | W | Y | <user-defined Name>
 //
 // Reduction rules:
 //   I x       →  x
 //   K x y     →  x
 //   S x y z   →  (x z)(y z)
-//   B x y z   →  x (y z)          (composition;  SKI: S(KS)K)
-//   C x y z   →  x z y            (flip;          SKI: S(S(K(S(KS)K))S)(KK))
-//   W x y     →  x y y            (duplication;   SKI: SS(KI))
-//   Y f       →  f (Y f)          (fixed-point;   SKI: S(K(SII))(S(S(KS)K)(K(SII))))
+//   B x y z   →  x (y z)          (composition)
+//   C x y z   →  x z y            (flip)
+//   W x y     →  x y y            (duplication)
+//   Y f (lazy)→  f (Y f) applied to next argument
 //
 // Run with: dotnet run -- "(((S K) K) I)"
 // Or interactively with no arguments.
 
 using SKI;
 
+var env = new Dictionary<string, Expr>(StringComparer.Ordinal);
+
 if (args.Length > 0)
 {
-    RunExpression(string.Concat(args));
+    RunLine(string.Concat(args), env);
 }
 else
 {
     Console.WriteLine("SKI(BCWY) Combinator Interpreter");
     Console.WriteLine("Syntax : (expr expr) for application");
-    Console.WriteLine("Atoms  : S  K  I  B  C  W  Y");
+    Console.WriteLine("Atoms  : S  K  I  B  C  W  Y  <Name>");
+    Console.WriteLine("Define : Name = expr");
     Console.WriteLine("Rules  : I x=x  K x y=x  S x y z=(xz)(yz)");
-    Console.WriteLine("         B x y z=x(yz)  C x y z=xzy  W x y=xyy  Y f=f(Y f)");
+    Console.WriteLine("         B x y z=x(yz)  C x y z=xzy  W x y=xyy  Y f=f(Yf)");
     Console.WriteLine("Type 'exit' to quit.\n");
     while (true)
     {
@@ -37,18 +42,42 @@ else
             break;
         if (string.IsNullOrWhiteSpace(line))
             continue;
-        RunExpression(line.Trim());
+        RunLine(line.Trim(), env);
     }
 }
 
-static void RunExpression(string input)
+static void RunLine(string input, Dictionary<string, Expr> env)
 {
     try
     {
+        // Detect   Name = expr   — left side must be a plain identifier, not a builtin.
+        var eqIdx = input.IndexOf('=');
+        if (eqIdx > 0)
+        {
+            var namePart = input[..eqIdx].Trim();
+            if (IsIdent(namePart))
+            {
+                if (Combinators.IsBuiltin(namePart))
+                    throw new InvalidOperationException($"Cannot redefine built-in combinator '{namePart}'.");
+                var bodyPart = input[(eqIdx + 1)..].Trim();
+                var bodyTokens = Lexer.Tokenize(bodyPart);
+                var body = Parser.Parse(bodyTokens, env);
+                if (bodyTokens.Count > 0)
+                    throw new FormatException("Unexpected tokens after definition body.");
+                env[namePart] = body;
+                Console.WriteLine($"  Defined {namePart} = {body}");
+                return;
+            }
+        }
+
+        // Otherwise it's an expression to reduce.
         var tokens = Lexer.Tokenize(input);
-        var expr = Parser.Parse(tokens);
+        var expr = Parser.Parse(tokens, env);
+        if (tokens.Count > 0)
+            throw new FormatException("Unexpected tokens after expression.");
         Console.WriteLine($"  Parsed : {expr}");
-        var result = Reducer.Reduce(expr);
+        var expanded = Expander.Expand(expr, env);
+        var result = Reducer.Reduce(expanded);
         Console.WriteLine($"  Result : {result}");
     }
     catch (Exception ex)
@@ -56,6 +85,10 @@ static void RunExpression(string input)
         Console.WriteLine($"  Error  : {ex.Message}");
     }
 }
+
+static bool IsIdent(string s) =>
+    s.Length > 0 && char.IsLetter(s[0]) &&
+    s.All(c => char.IsLetterOrDigit(c) || c == '_');
 
 namespace SKI
 {
@@ -67,13 +100,15 @@ namespace SKI
 
         private static string Print(Expr e) => e switch
         {
-            Combinator c => c.Name.ToString(),
+            Combinator c    => c.Name.ToString(),
+            NameRef nr      => nr.Name,
             App(var f, var x) => $"({Print(f)} {Print(x)})",
             _ => "?"
         };
     }
 
     record Combinator(char Name) : Expr;
+    record NameRef(string Name)  : Expr;
     record App(Expr Fun, Expr Arg) : Expr;
 
     static class Combinators
@@ -85,22 +120,45 @@ namespace SKI
         public static readonly Combinator C = new('C');
         public static readonly Combinator W = new('W');
         public static readonly Combinator Y = new('Y');
+
+        private static readonly Dictionary<string, Combinator> Builtins = new(StringComparer.Ordinal)
+        {
+            ["S"] = S, ["K"] = K, ["I"] = I,
+            ["B"] = B, ["C"] = C, ["W"] = W, ["Y"] = Y
+        };
+
+        public static bool IsBuiltin(string name) => Builtins.ContainsKey(name);
+        public static Combinator FromName(string name) => Builtins[name];
     }
+
+    // ── Tokens ────────────────────────────────────────────────────────────────
+
+    enum TokenKind { LParen, RParen, Ident }
+    record Token(TokenKind Kind, string Value);
 
     // ── Lexer ─────────────────────────────────────────────────────────────────
 
     static class Lexer
     {
-        public static Queue<char> Tokenize(string source)
+        public static Queue<Token> Tokenize(string source)
         {
-            var q = new Queue<char>();
-            foreach (var ch in source)
+            var q = new Queue<Token>();
+            int i = 0;
+            while (i < source.Length)
             {
-                if (char.IsWhiteSpace(ch)) continue;
-                if (ch is 'S' or 'K' or 'I' or 'B' or 'C' or 'W' or 'Y' or '(' or ')')
-                    q.Enqueue(ch);
-                else
-                    throw new FormatException($"Unexpected character '{ch}'.");
+                char ch = source[i];
+                if (char.IsWhiteSpace(ch)) { i++; continue; }
+                if (ch == '(') { q.Enqueue(new Token(TokenKind.LParen, "(")); i++; continue; }
+                if (ch == ')') { q.Enqueue(new Token(TokenKind.RParen, ")")); i++; continue; }
+                if (char.IsLetter(ch) || ch == '_')
+                {
+                    int start = i;
+                    while (i < source.Length && (char.IsLetterOrDigit(source[i]) || source[i] == '_'))
+                        i++;
+                    q.Enqueue(new Token(TokenKind.Ident, source[start..i]));
+                    continue;
+                }
+                throw new FormatException($"Unexpected character '{ch}'.");
             }
             return q;
         }
@@ -110,38 +168,64 @@ namespace SKI
 
     static class Parser
     {
-        public static Expr Parse(Queue<char> tokens)
+        public static Expr Parse(Queue<Token> tokens, Dictionary<string, Expr> env)
         {
             if (tokens.Count == 0)
                 throw new FormatException("Unexpected end of input.");
 
             var tok = tokens.Dequeue();
 
-            return tok switch
+            return tok.Kind switch
             {
-                'S' => Combinators.S,
-                'K' => Combinators.K,
-                'I' => Combinators.I,
-                'B' => Combinators.B,
-                'C' => Combinators.C,
-                'W' => Combinators.W,
-                'Y' => Combinators.Y,
-                '(' => ParseApp(tokens),
-                ')' => throw new FormatException("Unexpected ')'.")
+                TokenKind.Ident   => Combinators.IsBuiltin(tok.Value)
+                                        ? Combinators.FromName(tok.Value)
+                                        : (Expr)new NameRef(tok.Value),
+                TokenKind.LParen  => ParseApp(tokens, env),
+                TokenKind.RParen  => throw new FormatException("Unexpected ')'.")
                 ,
-                _ => throw new FormatException($"Unexpected token '{tok}'.")
+                _ => throw new FormatException($"Unexpected token '{tok.Value}'.")
             };
         }
 
-        private static Expr ParseApp(Queue<char> tokens)
+        private static Expr ParseApp(Queue<Token> tokens, Dictionary<string, Expr> env)
         {
-            var fun = Parse(tokens);
-            var arg = Parse(tokens);
+            var fun = Parse(tokens, env);
+            var arg = Parse(tokens, env);
 
-            if (tokens.Count == 0 || tokens.Dequeue() != ')')
+            if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.RParen)
                 throw new FormatException("Expected ')' to close application.");
+            tokens.Dequeue();
 
             return new App(fun, arg);
+        }
+    }
+
+    // ── Expander ──────────────────────────────────────────────────────────────
+
+    static class Expander
+    {
+        /// <summary>Recursively substitutes all NameRef nodes with their stored definitions.</summary>
+        public static Expr Expand(Expr expr, Dictionary<string, Expr> env,
+                                  HashSet<string>? expanding = null)
+        {
+            switch (expr)
+            {
+                case NameRef(var name):
+                    if (!env.TryGetValue(name, out var def))
+                        throw new InvalidOperationException($"Undefined name '{name}'.");
+                    if (expanding is not null && expanding.Contains(name))
+                        throw new InvalidOperationException($"Cyclic definition involving '{name}'.");
+                    var seen = expanding is null
+                        ? new HashSet<string>(StringComparer.Ordinal) { name }
+                        : new HashSet<string>(expanding, StringComparer.Ordinal) { name };
+                    return Expand(def, env, seen);
+
+                case App(var f, var x):
+                    return new App(Expand(f, env, expanding), Expand(x, env, expanding));
+
+                default:
+                    return expr;   // Combinator — nothing to expand
+            }
         }
     }
 
