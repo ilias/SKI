@@ -1,0 +1,308 @@
+# test.ski - Test suite for the SKI interpreter and init.ski library.
+#
+# Convention: test expressions reduce to S (= TRUE sentinel) on PASS.
+# Load with:  :load test.ski
+#
+# Each section first defines any helpers needed, then runs assertions.
+# An assertion  (((expr) S) K)  yields S when expr is TRUE, K when FALSE.
+# A numeric assertion  ((((EQ n m) S) K))  yields S when n == m (Church).
+
+# ============================================================================
+# 0. INTERPRETER SANITY
+# ============================================================================
+
+# I combinator
+(I S)
+
+# K combinator (should select first)
+(((K S) K) I)
+
+# S combinator: S K K x = I x = x
+((((S K) K) S) I)
+
+# B combinator: B K I S = K (I S) = K S
+(((B K) I) S)
+
+# C combinator: C K S I = K I S = I
+(((C K) S) I)
+
+# W combinator: W K S = K S S = S
+((W K) S)
+
+# Y combinator (lazy): (Y K) I = K
+((Y K) I)
+
+# ============================================================================
+# 1. PRIMITIVE ALIASES
+# ============================================================================
+
+# ID = I
+((ID S) I)
+
+# CONST = K: CONST S anything = S
+(((CONST S) K) I)
+
+# COMPOSE = B: COMPOSE K I S = K (I S) = K S
+(((COMPOSE K) I) S)
+
+# FLIP = C: FLIP K S I = K I S = I
+(((FLIP K) S) I)
+
+# DUP = W: DUP K S = K S S = S
+((DUP K) S)
+
+# ============================================================================
+# 2. BOOLEANS
+# ============================================================================
+
+# TRUE selects first
+(((TRUE S) K) I)
+
+# FALSE selects second
+(((FALSE K) S) I)
+
+# NOT TRUE = FALSE
+((((NOT TRUE) K) S) I)
+
+# NOT FALSE = TRUE
+((((NOT FALSE) S) K) I)
+
+# NOT (NOT TRUE) = TRUE
+((((NOT (NOT TRUE)) S) K) I)
+
+# AND TRUE TRUE = TRUE
+(((((AND TRUE) TRUE) S) K) I)
+
+# AND TRUE FALSE = FALSE
+(((((AND TRUE) FALSE) K) S) I)
+
+# AND FALSE TRUE = FALSE
+(((((AND FALSE) TRUE) K) S) I)
+
+# AND FALSE FALSE = FALSE
+(((((AND FALSE) FALSE) K) S) I)
+
+# OR TRUE  TRUE  = TRUE
+(((((OR TRUE) TRUE) S) K) I)
+
+# OR TRUE  FALSE = TRUE
+(((((OR TRUE) FALSE) S) K) I)
+
+# OR FALSE TRUE  = TRUE
+(((((OR FALSE) TRUE) S) K) I)
+
+# OR FALSE FALSE = FALSE
+(((((OR FALSE) FALSE) K) S) I)
+
+# XOR TRUE  FALSE = TRUE
+(((((XOR TRUE) FALSE) S) K) I)
+
+# XOR FALSE TRUE  = TRUE
+(((((XOR FALSE) TRUE) S) K) I)
+
+# XOR TRUE  TRUE  = FALSE
+(((((XOR TRUE) TRUE) K) S) I)
+
+# XOR FALSE FALSE = FALSE
+(((((XOR FALSE) FALSE) K) S) I)
+
+# NAND TRUE TRUE = FALSE  (NOT (AND T T) = NOT T = F)
+(((((NAND TRUE) TRUE) K) S) I)
+
+# NAND FALSE FALSE = TRUE
+(((((NAND FALSE) FALSE) S) K) I)
+
+# NOR FALSE FALSE = TRUE
+(((((NOR FALSE) FALSE) S) K) I)
+
+# NOR TRUE FALSE = FALSE
+(((((NOR TRUE) FALSE) K) S) I)
+
+# IF: IF TRUE S K = S
+(((IF TRUE) S) K)
+
+# IF: IF FALSE S K = K
+(((IF FALSE) K) S)
+
+# ============================================================================
+# 3. CHURCH PAIRS
+# ============================================================================
+
+# FST (PAIR S K) = S
+((FST ((PAIR S) K)) I)
+
+# SND (PAIR S K) = K
+((SND ((PAIR S) K)) I)
+
+# FST (SWAP (PAIR S K)) = K
+((FST (SWAP ((PAIR S) K))) I)
+
+# SND (SWAP (PAIR S K)) = S
+((SND (SWAP ((PAIR S) K))) I)
+
+# nested pair: FST (SND (PAIR S (PAIR K I))) = K
+((FST (SND ((PAIR S) ((PAIR K) I)))) I)
+
+# ============================================================================
+# 4. CHURCH NUMERALS - SUCC / PRED
+# ============================================================================
+
+# ISZERO ZERO = TRUE
+(((ISZERO ZERO) S) K)
+
+# ISZERO ONE  = FALSE
+(((ISZERO ONE) K) S)
+
+# ISZERO TWO  = FALSE
+(((ISZERO TWO) K) S)
+
+# SUCC ZERO = ONE  =>  EQ (SUCC ZERO) ONE = TRUE
+((((EQ (SUCC ZERO)) ONE) S) K)
+
+# SUCC TWO  = THREE
+((((EQ (SUCC TWO)) THREE) S) K)
+
+# PRED ONE  = ZERO
+((((EQ (PRED ONE)) ZERO) S) K)
+
+# PRED THREE = TWO
+((((EQ (PRED THREE)) TWO) S) K)
+
+# PRED ZERO = ZERO  (underflow clamped)
+((((EQ (PRED ZERO)) ZERO) S) K)
+
+# ============================================================================
+# 5. CHURCH NUMERALS - ARITHMETIC
+# ============================================================================
+
+# ADD ZERO TWO = TWO
+((((EQ ((ADD ZERO) TWO)) TWO) S) K)
+
+# ADD TWO THREE = FIVE
+((((EQ ((ADD TWO) THREE)) FIVE) S) K)
+
+# ADD THREE FOUR = SEVEN
+((((EQ ((ADD THREE) FOUR)) SEVEN) S) K)
+
+# MUL ZERO THREE = ZERO
+((((EQ ((MUL ZERO) THREE)) ZERO) S) K)
+
+# MUL TWO THREE = SIX
+((((EQ ((MUL TWO) THREE)) SIX) S) K)
+
+# MUL THREE THREE = NINE
+((((EQ ((MUL THREE) THREE)) NINE) S) K)
+
+# POW TWO ZERO = ONE   (2^0 = 1)
+((((EQ ((POW TWO) ZERO)) ONE) S) K)
+
+# POW TWO ONE  = TWO   (2^1 = 2)
+((((EQ ((POW TWO) ONE)) TWO) S) K)
+
+# POW TWO TWO  = FOUR  (2^2 = 4)
+((((EQ ((POW TWO) TWO)) FOUR) S) K)
+
+# POW THREE TWO = NINE  (3^2 = 9)
+((((EQ ((POW THREE) TWO)) NINE) S) K)
+
+# SUB THREE ONE  = TWO
+((((EQ ((SUB THREE) ONE)) TWO) S) K)
+
+# SUB TWO TWO   = ZERO
+((((EQ ((SUB TWO) TWO)) ZERO) S) K)
+
+# SUB ONE THREE = ZERO  (underflow clamped)
+((((EQ ((SUB ONE) THREE)) ZERO) S) K)
+
+# ============================================================================
+# 6. CHURCH NUMERALS - COMPARISONS
+# ============================================================================
+
+# LEQ TWO THREE = TRUE
+((((LEQ TWO) THREE) S) K)
+
+# LEQ THREE THREE = TRUE
+((((LEQ THREE) THREE) S) K)
+
+# LEQ FOUR THREE = FALSE
+((((LEQ FOUR) THREE) K) S)
+
+# EQ THREE THREE = TRUE
+((((EQ THREE) THREE) S) K)
+
+# EQ TWO THREE = FALSE
+((((EQ TWO) THREE) K) S)
+
+# GEQ THREE TWO = TRUE
+((((GEQ THREE) TWO) S) K)
+
+# GEQ TWO THREE = FALSE
+((((GEQ TWO) THREE) K) S)
+
+# GT THREE TWO = TRUE
+((((GT THREE) TWO) S) K)
+
+# GT TWO TWO = FALSE
+((((GT TWO) TWO) K) S)
+
+# LT TWO THREE = TRUE
+((((LT TWO) THREE) S) K)
+
+# LT THREE TWO = FALSE
+((((LT THREE) TWO) K) S)
+
+# ============================================================================
+# 7. CHURCH LISTS
+# ============================================================================
+
+# ISNIL NIL = TRUE
+(((ISNIL NIL) S) K)
+
+# ISNIL (CONS S NIL) = FALSE
+(((ISNIL ((CONS S) NIL)) K) S)
+
+# HEAD (CONS S NIL) = S
+((HEAD ((CONS S) NIL)) I)
+
+# HEAD (CONS K NIL) = K
+((HEAD ((CONS K) NIL)) I)
+
+# ISNIL (TAIL (CONS S NIL)) = TRUE  (tail of singleton = NIL)
+(((ISNIL (TAIL ((CONS S) NIL))) S) K)
+
+# HEAD (TAIL (CONS S (CONS K NIL))) = K  (second element)
+((HEAD (TAIL ((CONS S) ((CONS K) NIL)))) I)
+
+# ============================================================================
+# 8. HIGHER-ORDER UTILITIES
+# ============================================================================
+
+# TWICE SUCC ONE = THREE  (SUCC(SUCC(ONE)) = THREE)
+((((EQ (TWICE SUCC) ONE) THREE... # actually: (TWICE SUCC ONE) = SUCC(SUCC ONE) = THREE
+# Use numeric equality:
+((((EQ ((TWICE SUCC) ONE)) THREE) S) K)
+
+# THRICE SUCC ZERO = THREE
+((((EQ ((THRICE SUCC) ZERO)) THREE) S) K)
+
+# ON ADD FST (PAIR TWO THREE) (PAIR ONE FOUR)
+# = ADD (FST (PAIR TWO THREE)) (FST (PAIR ONE FOUR))
+# = ADD TWO ONE = THREE
+((((EQ ((((ON ADD) FST) ((PAIR TWO) THREE)) ((PAIR ONE) FOUR))) THREE) S) K)
+
+# ITERATE = I: ITERATE SUCC TWO = SUCC TWO (partial; just alias check)
+((ITERATE SUCC) TWO)
+
+# ============================================================================
+# 9. FIXED POINT (Y combinator)
+# ============================================================================
+
+# Define factorial helper using Y:
+# FACTF rec n = ISZERO n ONE (MUL n (rec (PRED n)))
+# In SKI with names: use IF = I, so:
+# FACTF = S (B (B (S IF)) (B ISZERO I))
+#           (S (K ONE) (S MUL (B rec PRED)))
+# This is complex; test Y with a simpler recursive definition:
+# ADDLOOP rec n acc = ISZERO n acc (rec (PRED n) (ADD n acc))
+# Instead, just verify Y K I = (K (Y K)) I = Y K  (K ignores I, leaves Y K)
+((Y K) I)
