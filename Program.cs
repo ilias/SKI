@@ -37,6 +37,7 @@ else
     Console.WriteLine("Atoms  : S  K  I  B  C  W  Y  <Name>");
     Console.WriteLine("Define : Name = expr");
     Console.WriteLine("Load   : :load <file.ski>");
+    Console.WriteLine("Env    : :env [pattern]  — list defined names");
     Console.WriteLine("Rules  : I x=x  K x y=x  S x y z=(xz)(yz)");
     Console.WriteLine("         B x y z=x(yz)  C x y z=xzy  W x y=xyy  Y f=f(Yf)");
     if (initPath is not null)
@@ -60,6 +61,14 @@ else
                 Console.WriteLine("  Usage: :load <file.ski>");
             else
                 LoadFile(path, env, silent: false);
+            continue;
+        }
+
+        // :env [pattern]
+        if (trimmed.StartsWith(":env", StringComparison.OrdinalIgnoreCase))
+        {
+            var pat = trimmed[4..].Trim();
+            PrintEnv(env, pat.Length > 0 ? pat : null);
             continue;
         }
 
@@ -122,8 +131,10 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent)
     int defined = 0, errors = 0;
     foreach (var raw in File.ReadLines(path))
     {
-        var line = raw.Trim();
-        if (line.Length == 0 || line.StartsWith('#')) continue;
+        // Strip inline comments and trim whitespace
+        var commentIdx = raw.IndexOf('#');
+        var line = (commentIdx >= 0 ? raw[..commentIdx] : raw).Trim();
+        if (line.Length == 0) continue;
         try
         {
             // Only definitions are expected in library files.
@@ -166,6 +177,31 @@ static string? FindInitFile()
     foreach (var candidate in new[] { Path.Combine(exeDir, "init.ski"), "init.ski" })
         if (File.Exists(candidate)) return candidate;
     return null;
+}
+
+/// <summary>Prints all user-defined names, optionally filtered by a substring pattern.</summary>
+static void PrintEnv(Dictionary<string, Expr> env, string? pattern)
+{
+    var entries = env
+        .Where(kv => pattern is null ||
+                     kv.Key.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+        .OrderBy(kv => kv.Key)
+        .ToList();
+
+    if (entries.Count == 0)
+    {
+        Console.WriteLine(pattern is null
+            ? "  (no definitions)"
+            : $"  (no definitions matching '{pattern}')");
+        return;
+    }
+
+    int nameWidth = entries.Max(kv => kv.Key.Length);
+    foreach (var (name, body) in entries)
+        Console.WriteLine($"  {name.PadRight(nameWidth)} = {body}");
+
+    Console.WriteLine($"  ---\n  {entries.Count} definition(s)" +
+                      (pattern is not null ? $" matching '{pattern}'" : ""));
 }
 
 namespace SKI

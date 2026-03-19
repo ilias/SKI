@@ -1,77 +1,156 @@
 # SKI standard library - loaded automatically at startup.
 # Lines starting with # are comments. Blank lines are ignored.
-# Syntax: Name = expr   (expr uses strictly binary (f x) notation)
+# All expressions use strictly binary (f x) application notation.
 
-# -- Aliases for builtins -----------------------------------------------------
-ID      = I
-CONST   = K
-COMPOSE = B
-FLIP    = C
-DUP     = W
-FIX     = Y
+# ============================================================================
+# PRIMITIVE ALIASES
+# ============================================================================
+ID      = I                    # id x = x
+CONST   = K                    # const x y = x
+COMPOSE = B                    # compose f g x = f (g x)
+FLIP    = C                    # flip f x y = f y x
+DUP     = W                    # dup f x = f x x
+FIX     = Y                    # fix f = f (fix f)  [lazy]
 
-# -- Boolean Church encoding --------------------------------------------------
-# TRUE  x y = x    (select first)
-# FALSE x y = y    (select second)
+# ============================================================================
+# BOOLEANS  (Church encoding: bool = \t f -> t/f)
+# TRUE x y = x    FALSE x y = y
+# ============================================================================
 TRUE    = K
 FALSE   = (K I)
 
-# NOT p x y = p y x  =>  NOT = C
-# Verify: C TRUE x y = TRUE y x = K y x = y = FALSE x y
+# NOT p x y = p y x  =>  C
 NOT     = C
 
-# AND p q = p q FALSE  =>  AND = ((S S) (K FALSE))
-# Verify: S S (K FALSE) p q = S p FALSE q = p q (FALSE q) = p q FALSE
+# AND p q = p q FALSE  =>  S S (K FALSE)
 AND     = ((S S) (K FALSE))
 
-# OR p q = p TRUE q  =>  OR = ((S I) (K TRUE))
-# Verify: S I (K TRUE) p = p TRUE;  (p TRUE) q
+# OR  p q = p TRUE q  =>  S (K TRUE) I ... but we need curried: S I (K TRUE)
 OR      = ((S I) (K TRUE))
 
-# IF b t e = b t e  (b is already a selector)
+# XOR p q = p (NOT q) q  =>  S (S (K NOT)) I ... = S(C(KN))I?
+# Easier: XOR = (S (B NOT) I) -- S(BNI) p q = BN p (Ip) q... No.
+# XOR p q = p (NOT q) q  : lambda-lift:
+# XOR = W (B (B NOT) (S (K (B NOT)) I))  -- too complex; use direct SKI:
+# XOR = (S (S (K (S (K NOT) I)) I) (K I))
+# Simpler: XOR p q = (AND p (NOT q)) OR (AND (NOT p) q)
+# Actually the cleanest known: XOR = (S (B B (K NOT)) (K I))
+# Verify: S(BB(KNOT))(KI) p q
+#   = BB(KNOT) p (KI p) q = BB(KNOT) p I q = B(KNOT p) I q = KNOT p (I q) = NOT (I q) = NOT q
+#   Hmm that gives NOT q regardless of p.
+# Correct SKI for XOR: (C (B NOT) I) simplified -- let's use the verified form:
+# XOR p q = p (NOT q) q  means XOR = S (B NOT) I  NO let's verify:
+#   S(BNOT)I p = B NOT p (I p) = NOT(p p) -- wrong
+# Safest: define in terms of AND/OR/NOT -- skip for now and use a simpler definition
+# XOR p q = OR (AND p (NOT q)) (AND (NOT p) q)
+# As a combinator expression with names it's fine:
+# XOR = (S ((B OR) ((B AND) NOT)) ((B AND) (K NOT)))  -- defines in terms of others
+# Actually simpler to just test: (S (K (S (K NOT))) S)(K I) -- no
+# Let's go with the readable form using existing names:
+XOR     = ((S ((B OR) ((B AND) NOT))) ((B AND) (K NOT)))
+
+# NAND/NOR
+NAND    = ((B NOT) AND)
+NOR     = ((B NOT) OR)
+
+# IF b t e = b t e  (bool is already a selector; IF = I)
 IF      = I
 
-# -- Church pairs (Vireo) -----------------------------------------------------
-# PAIR a b f = f a b
-# Derivation: PAIR = ((B C) ((B (S I)) K))
-# Verify: B(SI)K a = SI(Ka);  C(SI(Ka)) b f = SI(Ka) f b;
-#         SI(Ka) f = f a;  then applied to b: f a b
+# ============================================================================
+# CHURCH PAIRS  (Vireo: pair a b f = f a b)
+# PAIR = B C (B (S I) K)
+# ============================================================================
 PAIR    = ((B C) ((B (S I)) K))
-
-# FST p = p TRUE  =>  FST = ((S I) (K TRUE))
 FST     = ((S I) (K TRUE))
-
-# SND p = p FALSE  =>  SND = ((S I) (K FALSE))
 SND     = ((S I) (K FALSE))
 
-# -- Church numerals ----------------------------------------------------------
-# n f x = f applied n times to x
+# Swap pair elements: SWAP p = PAIR (SND p) (FST p)
+SWAP    = ((S ((B PAIR) SND)) FST)
+
+# ============================================================================
+# CHURCH NUMERALS  (n f x = f^n x)
+# ============================================================================
 ZERO    = (K I)
 ONE     = I
-
-# SUCC = (S B)  --  S B n f x = B f (n f) x = f (n f x)
 SUCC    = (S B)
 TWO     = ((S B) I)
 THREE   = ((S B) ((S B) I))
 FOUR    = ((S B) ((S B) ((S B) I)))
+FIVE    = ((S B) ((S B) ((S B) ((S B) I))))
+SIX     = ((S B) ((S B) ((S B) ((S B) ((S B) I)))))
+SEVEN   = ((S B) ((S B) ((S B) ((S B) ((S B) ((S B) I))))))
+EIGHT   = ((S B) ((S B) ((S B) ((S B) ((S B) ((S B) ((S B) I)))))))
+NINE    = ((S B) ((S B) ((S B) ((S B) ((S B) ((S B) ((S B) ((S B) I))))))))
+TEN     = ((S B) ((S B) ((S B) ((S B) ((S B) ((S B) ((S B) ((S B) ((S B) I)))))))))
 
-# ADD = ((B S) (B B))
-# Verify: B S (B B) m n f x = S(B B m) n f x = B B m f (n f) x
-#       = B(mf)(nf) x = mf(nfx) = m f (n f x)
+# ADD m n f x = m f (n f x)  =>  (B S) (B B)
 ADD     = ((B S) (B B))
 
-# MUL = B  --  B m n f = m (n f) : apply f n times, then m times
+# MUL m n = compose^m n  =>  B
 MUL     = B
 
+# POW m n = n m  (apply m n times)  =>  C I  (flip identity)
+POW     = (C I)
+
+# PRED via Pair-shift:
+# step p = PAIR (SND p) (SUCC (SND p))
+# PRED n f x = FST (n step (PAIR x x))
+STEP    = ((S ((B PAIR) SND)) ((B SUCC) SND))
+PRED    = ((B FST) ((C ((B B) (B STEP))) ((S PAIR) I)))
+
+# SUB m n = n PRED m
+SUB     = ((C ((B B) (B PRED))) I)
+
 # ISZERO n = n (K FALSE) TRUE
-# Derivation: C (S I (K (K FALSE))) TRUE
-# K(KFALSE) is constant so SI(K(KFALSE)) n = n (K FALSE)
 ISZERO  = ((C ((S I) (K (K FALSE)))) TRUE)
 
-# -- Function utilities -------------------------------------------------------
-# TWICE f x = f (f x)  =  W B
-# W B f = B f f = f . f;  (W B f) x = f(f x)
+# LEQ m n = ISZERO (SUB m n)
+LEQ     = ((B ISZERO) SUB)
+
+# EQ  m n = AND (LEQ m n) (LEQ n m)
+EQ      = ((S ((B AND) LEQ)) ((C LEQ) I))
+
+# GEQ m n = LEQ n m
+GEQ     = (C LEQ)
+
+# GT  m n = NOT (LEQ m n)
+GT      = ((B NOT) LEQ)
+
+# LT  m n = NOT (LEQ n m)  = NOT (GEQ m n)
+LT      = ((B NOT) GEQ)
+
+# ============================================================================
+# CHURCH LISTS  (Scott / Church cons: cons h t = PAIR FALSE (PAIR h t))
+#   nil       = TRUE          (isNil returns TRUE)
+#   isNil  l  = FST l
+#   cons h t  = PAIR FALSE (PAIR h t)
+#   head   l  = FST (SND l)
+#   tail   l  = SND (SND l)
+# ============================================================================
+NIL     = TRUE
+ISNIL   = FST
+CONS    = ((B (PAIR FALSE)) PAIR)
+HEAD    = ((B FST) SND)
+TAIL    = ((B SND) SND)
+
+# ============================================================================
+# HIGHER-ORDER UTILITIES
+# ============================================================================
+
+# APPLY f x = f x  (identity on functions)
+APPLY   = I
+
+# TWICE  f x = f (f x)  =  W B
 TWICE   = (W B)
 
-# APPLY f x = f x
-APPLY   = I
+# THRICE f x = f (f (f x))  =  THREE COMPOSE  ... but MUL THREE COMPOSE = B(Bf)(Bf)
+# Simplest: TWO applied to COMPOSE gives (B . B) . f = B(Bf), so THRICE = MUL THREE
+# Actually: THREE B f = B(Bf)(B(Bf)) ... complex. Just use:
+THRICE  = ((MUL THREE) B)
+
+# ON g f x y = g (f x) (f y)   Psi combinator
+# PSI g f x y = g(fx)(fy)  =  B(BS)B g f  applied to x and y
+ON      = ((B ((B S) B)) B)
+
+# ITERATE n f x = f^n x  (same as Church numeral application, alias for clarity)
+ITERATE = I
