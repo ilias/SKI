@@ -22,6 +22,7 @@ A complete combinator calculus interpreter written in C# (.NET 10). Supports the
     - [Church Numerals](#church-numerals)
       - [Arithmetic](#arithmetic)
       - [Predicates \& Comparisons](#predicates--comparisons)
+      - [Numeral Utilities](#numeral-utilities)
     - [Church Lists](#church-lists)
     - [Higher-Order Utilities](#higher-order-utilities)
   - [Encoding Conventions](#encoding-conventions)
@@ -167,7 +168,7 @@ The interpreter prints each defined name as it processes the file, then reports 
 
 ## Standard Library — `init.ski`
 
-Loaded automatically at startup. All 53 definitions use strictly binary `(f x)` notation.
+Loaded automatically at startup. All 62 definitions use strictly binary `(f x)` notation.
 
 ### Primitive Aliases
 
@@ -221,13 +222,17 @@ A pair `PAIR a b` stores two values; `FST` and `SND` project them.
 | `FST` | `FST p = p TRUE` — first projection |
 | `SND` | `SND p = p FALSE` — second projection |
 | `SWAP` | `SWAP p = PAIR (SND p) (FST p)` — swap pair elements |
+| `CURRY` | `CURRY f x y = f (PAIR x y)` — convert a pair-consuming function to curried form |
+| `UNCURRY` | `UNCURRY f p = f (FST p) (SND p)` — apply a curried function to a pair |
 
 **Examples:**
 
 ```
-((FST ((PAIR S) K)) I)       # → S
-((SND ((PAIR S) K)) I)       # → K
-((FST (SWAP ((PAIR S) K))) I)  # → K
+(FST ((PAIR S) K))                               # → S
+(SND ((PAIR S) K))                               # → K
+(FST (SWAP ((PAIR S) K)))                        # → K
+(((CURRY FST) S) K)                              # → S  (FST (PAIR S K))
+((UNCURRY ADD) ((PAIR TWO) THREE))               # → FIVE
 ```
 
 ---
@@ -262,7 +267,26 @@ A Church numeral `n` represents the natural number $n$ as `n f x = f^n x` — ap
 | `GT` | `GT m n` → `TRUE` if `m > n` |
 | `LT` | `LT m n` → `TRUE` if `m < n` |
 
+#### Numeral Utilities
+
+| Name | Description |
+|---|---|
+| `MAX` | `MAX m n` — larger of `m` and `n` |
+| `MIN` | `MIN m n` — smaller of `m` and `n` |
+| `EVEN` | `EVEN n` → `TRUE` if `n` is even |
+| `ODD` | `ODD n` → `TRUE` if `n` is odd |
+
 **Examples:**
+
+```
+((((EQ ((MAX TWO) THREE)) THREE) S) K)   # → S  (TRUE)
+((((EQ ((MIN TWO) THREE)) TWO) S) K)     # → S  (TRUE)
+(((EVEN ZERO) S) K)                      # → S  (TRUE)
+(((EVEN THREE) S) K)                     # → K  (FALSE)
+(((ODD THREE) S) K)                      # → S  (TRUE)
+```
+
+**Examples (arithmetic & comparisons):**
 
 ```
 (((ISZERO ZERO) S) K)              # → S  (TRUE)
@@ -283,20 +307,26 @@ Lists are encoded with a Church-style cons structure.
 
 | Name | Description |
 |---|---|
-| `NIL` | Empty list (= `TRUE`) |
+| `NIL` | Empty list |
 | `ISNIL` | `ISNIL l` → `TRUE` if `l` is `NIL` |
 | `CONS` | `CONS h t` — prepend `h` to list `t` |
 | `HEAD` | `HEAD l` — first element |
 | `TAIL` | `TAIL l` — rest of the list |
+| `SECOND` | `SECOND l = HEAD (TAIL l)` — second element |
+| `SINGLETON` | `SINGLETON x = CONS x NIL` — single-element list |
+| `LENGTH` | `LENGTH l` — Church numeral count of elements (recursive via `Y`) |
 
 **Examples:**
 
 ```
-(((ISNIL NIL) S) K)                          # → S  (TRUE)
-(((ISNIL ((CONS S) NIL)) K) S)               # → S  (FALSE)
-((HEAD ((CONS S) NIL)) I)                    # → S
-(((ISNIL (TAIL ((CONS S) NIL))) S) K)        # → S  (tail of singleton = NIL)
-((HEAD (TAIL ((CONS S) ((CONS K) NIL)))) I)  # → K  (second element)
+(((ISNIL NIL) S) K)                                          # → S  (TRUE)
+(((ISNIL ((CONS S) NIL)) S) K)                               # → K  (FALSE)
+(HEAD ((CONS S) NIL))                                        # → S
+(HEAD (SINGLETON K))                                         # → K
+(SECOND ((CONS S) ((CONS K) NIL)))                           # → K
+(((ISNIL (TAIL ((CONS S) NIL))) S) K)                        # → S  (tail of singleton = NIL)
+((((EQ (LENGTH NIL)) ZERO) S) K)                             # → S  (TRUE)
+((((EQ (LENGTH ((CONS S) ((CONS K) NIL)))) TWO) S) K)        # → S  (TRUE)
 ```
 
 ---
@@ -363,7 +393,6 @@ Because `Y` is lazy, `(Y DOUBLEF)` does not unfold until applied to an argument.
 ## Limitations
 
 - **No integers**: only Church numerals. Arithmetic on large numerals is exponentially expensive.
-- **Step limit**: reduction halts after 10,000 steps; complex recursive computations may hit this ceiling.
+- **Step limit**: reduction halts after 1,000,000 steps; complex recursive computations on large numerals may hit this ceiling.
 - **No I/O**: the interpreter is purely functional — expressions may only be evaluated, not executed for effects.
 - **No type system**: all terms are untyped; ill-formed expressions reduce to irreducible terms rather than raising type errors.
-- **No multi-arg shorthand**: `(f a b)` is a syntax error; use `((f a) b)` instead.
