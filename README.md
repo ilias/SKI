@@ -32,6 +32,8 @@ A complete combinator calculus interpreter written in C# (.NET 10). Supports the
     - [Recursive definitions with Y](#recursive-definitions-with-y)
   - [Lambda Abstraction](#lambda-abstraction)
   - [Parameterized Definitions](#parameterized-definitions)
+  - [Let-Expressions](#let-expressions)
+  - [Import Directive](#import-directive)
   - [Integer Literals](#integer-literals)
   - [Limitations](#limitations)
 
@@ -70,12 +72,13 @@ The old fully-explicit nesting `((f a) b)` still works identically — the two f
 **Grammar:**
 
 ```
-line  = Name params '=' expr     ;  definition (params may be empty)
-      | expr                     ;  reduction
+line  = Name params '=' expr                    ;  definition (params may be empty)
+      | expr                                    ;  reduction
 expr  = ATOM
-      | integer                  ;  Church numeral literal
-      | '\' ident+ '.' expr     ;  lambda abstraction
-      | '(' expr expr+ ')'      ;  left-associative application
+      | integer                                ;  Church numeral literal
+      | '\' ident+ '.' expr                   ;  lambda abstraction
+      | 'let' ident params '=' expr 'in' expr  ;  local binding
+      | '(' expr expr+ ')'                     ;  left-associative application
 params = ident*
 ```
 
@@ -104,8 +107,8 @@ Built-in names (`S K I B C W Y`) cannot be redefined by user code.
 ## Reduction Strategy
 
 - **Outermost-leftmost** (normal-order) reduction — guarantees finding a normal form whenever one exists.
-- Fully **iterative**: an internal zipper stack replaces recursion, so there is no risk of stack overflow on deeply nested expressions.
-- Reduction stops after **1,000,000 steps**; expressions that exceed this limit raise a step-limit error.
+- **Graph reduction with sharing**: terms are converted to a mutable graph at reduction-time. Shared sub-expressions are reduced once and all uses receive the result via indirection nodes, avoiding the exponential blowup that naive tree-rewriting causes with `W` and `S`.
+- Reduction stops after a configurable number of steps (**default: 1,000,000**). Use `:set steps N` in the REPL to raise or lower the limit.
 
 ---
 
@@ -128,10 +131,13 @@ Built-in names (`S K I B C W Y`) cannot be redefined by user code.
 | `:list <expr>` | Reduce `expr` and decode the result as a Church-encoded list |
 | `:bench <expr>` | Reduce `expr` and report the step count and wall-clock time |
 | `:trace` | Toggle step-by-step reduction output (prints each intermediate expression) |
+| `:set steps N` | Set the reduction step limit (default: 1,000,000) |
 | `:reset` | Clear all user-defined names and reload `init.ski` |
 | `:reload` | Re-read `init.ski` into the current environment without clearing user definitions |
 | `:help` / `:?` | Print the command reference |
 | `exit` | Quit the REPL |
+
+**History and auto-complete:** The REPL supports command history (Up/Down arrow keys to navigate previous inputs) and Tab-completion for `:commands`, built-in combinator names (`S K I B C W Y`), and all user-defined names.
 
 **Multi-line input:** end any line with `\` to continue on the next line:
 
@@ -220,6 +226,7 @@ A `.ski` file is a plain text file containing any mix of:
 - **Inline comments**: `Name = expr  # comment`
 - **Definition lines**: `Name = expr`
 - **Bare expression lines**: `(expr)` — evaluated immediately when the file is loaded; useful for tests and sanity checks.
+- **Import lines**: `import <path>` — load another `.ski` file; the path is resolved relative to the importing file.
 
 Load a file from the REPL:
 
@@ -228,6 +235,8 @@ Load a file from the REPL:
 ```
 
 The interpreter prints each defined name as it processes the file, then reports the total count of definitions and any errors.
+
+**Circular imports** are detected and silently skipped (each file is loaded at most once per load chain).
 
 ---
 
@@ -581,6 +590,81 @@ FACT = (Y FACTF)
 
 ---
 
+## Let-Expressions
+
+A `let`-expression introduces a local binding that is only visible inside its body:
+
+```
+let x = e1 in e2
+```
+
+This is syntactic sugar for `(\x. e2) e1` — the name `x` is bound to `e1` within `e2` only, without polluting the global environment. It is compiled to SKI at parse time via bracket abstraction, so there is zero runtime overhead compared to a direct application.
+
+**Parameterized form** — parameters after the name are allowed, exactly like top-level definitions:
+
+```
+let f x y = body in e2       ;  equivalent to: let f = \x y. body in e2
+```
+
+**Syntax rule:** `let` may appear anywhere a sub-expression is expected. The `in` body may itself be another `let`, enabling nesting.
+
+**Examples:**
+
+```
+# Trivial binding — result is S
+let s = S in s
+
+# K selects its first argument
+let k = K in ((k S) K)    # → S
+
+# Bind SUCC and use it in a boolean probe
+let f = SUCC in ((((EQ (f TWO)) THREE) S) K)    # → S  (TRUE)
+
+# Parameterized let — sq x = x * x
+let sq x = ((MUL x) x) in ((((EQ (sq THREE)) NINE) S) K)    # → S  (TRUE)
+
+# Nested lets — no extra parens around the inner let
+let x = TWO in let y = THREE in ((((EQ ((ADD x) y)) FIVE) S) K)    # → S  (TRUE)
+```
+
+> **Note:** `let` bindings use the same name-resolution as top-level definitions and lambda parameters; shadowing is supported.
+
+---
+
+## Import Directive
+
+Inside a `.ski` file you can load another `.ski` file with:
+
+```
+import <path>
+```
+
+The path is resolved **relative to the importing file**. Definitions from the imported file become available to all subsequent lines in the importing file.
+
+**Circular import protection:** each file in the current load chain is tracked; if a file has already been loaded in the current chain it is silently skipped, preventing infinite loops from mutual imports.
+
+**Example — `mylib.ski`:**
+
+```
+# mylib.ski
+DOUBLE n = (MUL 2 n)
+TRIPLE n = (MUL 3 n)
+```
+
+**Example — `main.ski`:**
+
+```
+import mylib.ski
+
+# DOUBLE and TRIPLE are now available
+((((EQ (DOUBLE THREE)) SIX) S) K)    # → S  (TRUE)
+((((EQ (TRIPLE TWO)) SIX) S) K)      # → S  (TRUE)
+```
+
+Import lines work at any position in a `.ski` file. Definitions that appear *before* an `import` line are not visible to the imported file (imports see only the global environment at the moment the `import` line is executed), but any definitions added by the imported file are available to all lines that follow the `import` in the parent file.
+
+---
+
 ## Integer Literals
 
 Any non-negative integer written directly in an expression is converted to the corresponding **Church numeral** at parse time:
@@ -616,6 +700,6 @@ The mapping is:
 ## Limitations
 
 - **Church numerals only**: integer literals are syntactic sugar — they compile to Church numerals at parse time. Arithmetic on large numerals is exponentially expensive in reduction steps.
-- **Step limit**: reduction halts after 1,000,000 steps; complex recursive computations on large numerals may hit this ceiling.
+- **Step limit**: configurable via `:set steps N` (default: 1,000,000). Complex recursive computations on large numerals may still hit this ceiling even when raised.
 - **No I/O**: the interpreter is purely functional — expressions may only be evaluated, not executed for effects.
 - **No type system**: all terms are untyped; ill-formed expressions reduce to irreducible terms rather than raising type errors.

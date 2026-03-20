@@ -506,3 +506,43 @@ FACT = (Y FACTF)
 
 # Non-zero literal: ISZERO 1 = FALSE
 (((ISZERO 1) S) K)
+
+# ============================================================================
+# 16. LET-EXPRESSIONS  (let x = e1 in e2  →  (\x. e2) e1)
+# ============================================================================
+
+# Trivial binding: let s = S in s → S
+let s = S in s
+
+# K binding used in body: let k = K in (k S K) → S  (K selects first)
+let k = K in ((k S) K)
+
+# Boolean probe inside the body: SUCC TWO = THREE
+let f = SUCC in ((((EQ (f TWO)) THREE) S) K)
+
+# Parameterized let (sugar for let sq = \x. ...): sq THREE = NINE
+let sq x = ((MUL x) x) in ((((EQ (sq THREE)) NINE) S) K)
+
+# Nested lets: TWO + THREE = FIVE  (no outer parens — parser handles nested let directly)
+let x = TWO in let y = THREE in ((((EQ ((ADD x) y)) FIVE) S) K)
+
+# Let with lambda body: double THREE = SIX
+let double = \n. ((MUL 2) n) in ((((EQ (double THREE)) SIX) S) K)
+
+# ============================================================================
+# 17. IMPORT DIRECTIVE  (import <path> inside .ski files resolves relative to importer)
+# ============================================================================
+
+import testlib.ski
+
+# DOUBLE_NAT (= MUL 2) THREE = SIX
+((((EQ (DOUBLE_NAT THREE)) SIX) S) K)
+
+# TRIPLE_NAT (= MUL 3) TWO = SIX
+((((EQ (TRIPLE_NAT TWO)) SIX) S) K)
+
+# Imported definitions compose with init.ski library: SUCC (DOUBLE_NAT ONE) = THREE
+((((EQ (SUCC (DOUBLE_NAT ONE))) THREE) S) K)
+
+# Imported + parameterized: DOUBLE_NAT applied via let binding
+let dn = DOUBLE_NAT in ((((EQ (dn FOUR)) EIGHT) S) K)

@@ -2,6 +2,7 @@
 // Grammar:
 //   line = Name '=' expr      (definition)
 //        | expr               (reduction)
+//        | let x = e1 in e2  (local binding, desugars to (\x. e2) e1)
 //   expr = ATOM | '(' expr expr ')'
 //   ATOM = S | K | I | B | C | W | Y | <user-defined Name>
 //
@@ -17,30 +18,39 @@
 // Lambda abstraction: \x y. body  — compiled to SKI via bracket abstraction
 // Integer literals:   0, 1, 42    — converted to Church numerals at parse time
 // Parameterized defs: F x y = body — sugar for  F = \x y. body
+// Let-expressions:    let x = e1 in e2  — sugar for  (\x. e2) e1
+// Import directive:   import <path>  — inside .ski files, loads another file
 // Run with: dotnet run -- "(((S K) K) I)"
 // Or interactively with no arguments.
 
 using SKI;
+using SysReadLine = System.ReadLine;
 
 var env = new Dictionary<string, Expr>(StringComparer.Ordinal);
 bool traceMode = false;
+int maxSteps = 1_000_000;
 
 // Auto-load init.ski from the same directory as the executable (or cwd).
 var initPath = FindInitFile();
 if (initPath is not null)
-    LoadFile(initPath, env, silent: true);
+    LoadFile(initPath, env, silent: true, maxSteps: maxSteps);
 
 if (args.Length > 0)
 {
-    RunLine(string.Concat(args), env, traceMode);
+    RunLine(string.Concat(args), env, traceMode, maxSteps);
 }
 else
 {
+    // Configure ReadLine for REPL history and tab completion
+    SysReadLine.HistoryEnabled = true;
+    SysReadLine.AutoCompletionHandler = new SkiAutoComplete(() => env);
+
     PrintHelp(initPath);
     while (true)
     {
-        Console.Write("> ");
-        var rawLine = Console.ReadLine();
+        string? rawLine;
+        try { rawLine = SysReadLine.Read("> "); }
+        catch (Exception) { rawLine = Console.ReadLine(); }
         if (rawLine is null || rawLine.Equals("exit", StringComparison.OrdinalIgnoreCase))
             break;
         if (string.IsNullOrWhiteSpace(rawLine))
@@ -68,7 +78,7 @@ else
             if (path.Length == 0)
                 Console.WriteLine("  Usage: :load <file.ski>");
             else
-                LoadFile(path, env, silent: false);
+                LoadFile(path, env, silent: false, maxSteps: maxSteps);
             continue;
         }
 
@@ -86,7 +96,7 @@ else
             env.Clear();
             if (initPath is not null)
             {
-                LoadFile(initPath, env, silent: true);
+                LoadFile(initPath, env, silent: true, maxSteps: maxSteps);
                 Cwl($"  Reset — reloaded {initPath} ({env.Count} definition(s))", ConsoleColor.DarkCyan);
             }
             else
@@ -123,7 +133,7 @@ else
             if (rest.Length == 0)
                 Cwl("  Usage: :nat <expr>", ConsoleColor.DarkGray);
             else
-                NatLine(rest, env);
+                NatLine(rest, env, maxSteps);
             continue;
         }
 
@@ -134,7 +144,7 @@ else
             if (rest.Length == 0)
                 Cwl("  Usage: :bool <expr>", ConsoleColor.DarkGray);
             else
-                BoolLine(rest, env);
+                BoolLine(rest, env, maxSteps);
             continue;
         }
 
@@ -163,7 +173,7 @@ else
             if (rest.Length == 0)
                 Cwl("  Usage: :bench <expr>", ConsoleColor.DarkGray);
             else
-                BenchLine(rest, env);
+                BenchLine(rest, env, maxSteps);
             continue;
         }
 
@@ -174,7 +184,7 @@ else
             if (rest.Length == 0)
                 Cwl("  Usage: :list <expr>", ConsoleColor.DarkGray);
             else
-                ListLine(rest, env);
+                ListLine(rest, env, maxSteps);
             continue;
         }
 
@@ -206,7 +216,7 @@ else
             else
             {
                 int before = env.Count;
-                LoadFile(initPath, env, silent: true);
+                LoadFile(initPath, env, silent: true, maxSteps: maxSteps);
                 Cwl($"  Reloaded {initPath} ({env.Count - before} new, {env.Count} total)", ConsoleColor.DarkCyan);
             }
             continue;
@@ -231,7 +241,25 @@ else
             continue;
         }
 
-        RunLine(trimmed, env, traceMode);
+        // :set steps N  — configure reduction step limit
+        if (trimmed.StartsWith(":set", StringComparison.OrdinalIgnoreCase))
+        {
+            var setParts = trimmed[4..].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (setParts.Length == 2 &&
+                setParts[0].Equals("steps", StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(setParts[1], out var newLimit) && newLimit > 0)
+            {
+                maxSteps = newLimit;
+                Cwl($"  Step limit set to {maxSteps:N0}", ConsoleColor.DarkCyan);
+            }
+            else
+            {
+                Cwl("  Usage: :set steps <N>   (e.g. :set steps 5000000)", ConsoleColor.DarkGray);
+            }
+            continue;
+        }
+
+        RunLine(trimmed, env, traceMode, maxSteps);
     }
 }
 
@@ -240,12 +268,14 @@ static void PrintHelp(string? initPath)
     Console.WriteLine("SKI(BCWY) Combinator Interpreter");
     Console.WriteLine("Syntax : (f a b c) = left-assoc application  |  (f a) = binary");
     Console.WriteLine("Lambda : \\x y. body  compiled to SKI via bracket abstraction");
+    Console.WriteLine("Let    : let x = e1 in e2  local binding (sugar for (\\x. e2) e1)");
     Console.WriteLine("Nums   : 0  42  etc.  converted to Church numerals at parse time");
     Console.WriteLine("Atoms  : S  K  I  B  C  W  Y  <Name>");
     Console.WriteLine("Define : Name = expr            simple definition");
     Console.WriteLine("         Name x y = expr        parameterized  (= Name = \\x y. expr)");
     Console.WriteLine("Rules  : I x=x  K x y=x  S x y z=(xz)(yz)");
     Console.WriteLine("         B x y z=x(yz)  C x y z=xzy  W x y=xyy  Y f=f(Yf)");
+    Console.WriteLine("Import : import <path>  inside .ski files, loads another file");
     Console.WriteLine("Commands:");
     Console.WriteLine("  :load <file>    load definitions/expressions from a .ski file");
     Console.WriteLine("  :save <file>    save all current definitions to a .ski file");
@@ -258,23 +288,27 @@ static void PrintHelp(string? initPath)
     Console.WriteLine("  :list <expr>    reduce and decode result as a Church list");
     Console.WriteLine("  :bench <expr>   reduce and report the number of steps taken");
     Console.WriteLine("  :trace          toggle step-by-step reduction trace");
+    Console.WriteLine("  :set steps N    set reduction step limit (default: 1,000,000)");
     Console.WriteLine("  :reset          clear user definitions and reload init.ski");
     Console.WriteLine("  :reload         re-read init.ski into current environment");
     Console.WriteLine("  :help           show this message");
     Console.WriteLine("  Tip: end a line with \\ to continue on the next line");
+    Console.WriteLine("  Tip: use Up/Down arrows for history, Tab for completion");
     Console.WriteLine("  exit            quit");
     if (initPath is not null)
         Console.WriteLine($"Loaded : {initPath}");
     Console.WriteLine();
 }
 
-static void RunLine(string input, Dictionary<string, Expr> env, bool trace)
+static void RunLine(string input, Dictionary<string, Expr> env, bool trace, int maxSteps)
 {
     try
     {
         // Detect   Name = expr   or   Name x y = expr   (parameterized definition).
+        // But NOT let-expressions, which also contain '='.
         var eqIdx = input.IndexOf('=');
-        if (eqIdx > 0)
+        if (eqIdx > 0 && !input.TrimStart().StartsWith("let ", StringComparison.OrdinalIgnoreCase)
+                      && !input.TrimStart().Equals("let", StringComparison.OrdinalIgnoreCase))
         {
             var lhsParts = input[..eqIdx].Trim()
                 .Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
@@ -312,7 +346,7 @@ static void RunLine(string input, Dictionary<string, Expr> env, bool trace)
         if (tokens.Count > 0)
             throw new FormatException("Unexpected tokens after expression.");
         Cwl($"  Parsed : {expr}", ConsoleColor.DarkGray);
-        var result = Reducer.Reduce(expr, env, trace ? new ColorWriter(ConsoleColor.DarkGray) : null);
+        var result = Reducer.Reduce(expr, env, trace ? new ColorWriter(ConsoleColor.DarkGray) : null, maxSteps);
         Cwl($"  Result : {result}", ConsoleColor.Cyan);
     }
     catch (Exception ex)
@@ -338,7 +372,7 @@ static void ExpandLine(string input, Dictionary<string, Expr> env)
     }
 }
 
-static void NatLine(string input, Dictionary<string, Expr> env)
+static void NatLine(string input, Dictionary<string, Expr> env, int maxSteps)
 {
     try
     {
@@ -346,9 +380,9 @@ static void NatLine(string input, Dictionary<string, Expr> env)
         var expr = Parser.Parse(tokens, env);
         if (tokens.Count > 0)
             throw new FormatException("Unexpected tokens after expression.");
-        var result = Reducer.Reduce(expr, env, null);
+        var result = Reducer.Reduce(expr, env, null, maxSteps);
         Cwl($"  Result : {result}", ConsoleColor.DarkGray);
-        var n = ChurchNat.Decode(result, env);
+        var n = ChurchNat.Decode(result, env, maxSteps);
         if (n is not null)
             Cwl($"  Nat    : {n}", ConsoleColor.Green);
         else
@@ -360,7 +394,7 @@ static void NatLine(string input, Dictionary<string, Expr> env)
     }
 }
 
-static void BoolLine(string input, Dictionary<string, Expr> env)
+static void BoolLine(string input, Dictionary<string, Expr> env, int maxSteps)
 {
     try
     {
@@ -368,9 +402,9 @@ static void BoolLine(string input, Dictionary<string, Expr> env)
         var expr = Parser.Parse(tokens, env);
         if (tokens.Count > 0)
             throw new FormatException("Unexpected tokens after expression.");
-        var result = Reducer.Reduce(expr, env, null);
+        var result = Reducer.Reduce(expr, env, null, maxSteps);
         Cwl($"  Result : {result}", ConsoleColor.DarkGray);
-        var b = ChurchBool.Decode(result, env);
+        var b = ChurchBool.Decode(result, env, maxSteps);
         if (b is true)
             Cwl("  Bool   : TRUE", ConsoleColor.Green);
         else if (b is false)
@@ -384,7 +418,7 @@ static void BoolLine(string input, Dictionary<string, Expr> env)
     }
 }
 
-static void ListLine(string input, Dictionary<string, Expr> env)
+static void ListLine(string input, Dictionary<string, Expr> env, int maxSteps)
 {
     try
     {
@@ -392,9 +426,9 @@ static void ListLine(string input, Dictionary<string, Expr> env)
         var expr   = Parser.Parse(tokens, env);
         if (tokens.Count > 0)
             throw new FormatException("Unexpected tokens after expression.");
-        var result = Reducer.Reduce(expr, env, null);
+        var result = Reducer.Reduce(expr, env, null, maxSteps);
         Cwl($"  Result : {result}", ConsoleColor.DarkGray);
-        var items = ChurchList.Decode(result, env);
+        var items = ChurchList.Decode(result, env, maxSteps);
         if (items is not null)
             Cwl($"  List   : [{string.Join(", ", items)}]  (length {items.Count})",
                 ConsoleColor.Green);
@@ -408,7 +442,7 @@ static void ListLine(string input, Dictionary<string, Expr> env)
     }
 }
 
-static void BenchLine(string input, Dictionary<string, Expr> env)
+static void BenchLine(string input, Dictionary<string, Expr> env, int maxSteps)
 {
     try
     {
@@ -417,7 +451,7 @@ static void BenchLine(string input, Dictionary<string, Expr> env)
         if (tokens.Count > 0)
             throw new FormatException("Unexpected tokens after expression.");
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var (result, steps) = Reducer.ReduceWithCount(expr, env);
+        var (result, steps) = Reducer.ReduceWithCount(expr, env, maxSteps);
         sw.Stop();
         Cwl($"  Result : {result}", ConsoleColor.Cyan);
         Cwl($"  Steps  : {steps:N0}  ({sw.ElapsedMilliseconds} ms)", ConsoleColor.DarkGray);
@@ -455,14 +489,25 @@ static void Cwl(string text, ConsoleColor color)
     Console.ResetColor();
 }
 
-/// <summary>Loads and executes every non-blank, non-comment line in a .ski file.</summary>
-static void LoadFile(string path, Dictionary<string, Expr> env, bool silent)
+/// <summary>Loads and executes every non-blank, non-comment line in a .ski file.
+/// Supports <c>import &lt;path&gt;</c> directives to load other .ski files relative to this one.</summary>
+static void LoadFile(string path, Dictionary<string, Expr> env, bool silent, int maxSteps,
+                     HashSet<string>? loadStack = null)
 {
+    path = Path.GetFullPath(path);
     if (!File.Exists(path))
     {
         Cwl($"  Error  : File not found: '{path}'", ConsoleColor.Red);
         return;
     }
+    // Guard against circular imports
+    loadStack ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    if (!loadStack.Add(path))
+    {
+        Cwl($"  Warning: circular import ignored: '{path}'", ConsoleColor.DarkYellow);
+        return;
+    }
+    var fileDir = Path.GetDirectoryName(path) ?? ".";
     int defined = 0, errors = 0;
     foreach (var raw in File.ReadLines(path))
     {
@@ -472,9 +517,20 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent)
         if (line.Length == 0) continue;
         try
         {
+            // import <path>  — load another .ski file relative to this one
+            if (line.StartsWith("import ", StringComparison.OrdinalIgnoreCase))
+            {
+                var importPath = line[7..].Trim();
+                if (!Path.IsPathRooted(importPath))
+                    importPath = Path.Combine(fileDir, importPath);
+                LoadFile(importPath, env, silent, maxSteps, loadStack);
+                continue;
+            }
             // Definitions: Name = expr  or  Name x y = expr  (parameterized).
+            // Exclude let-expressions which also contain '='.
             var eqIdx = line.IndexOf('=');
-            if (eqIdx > 0)
+            if (eqIdx > 0 && !line.StartsWith("let ", StringComparison.OrdinalIgnoreCase)
+                          && !line.Equals("let", StringComparison.OrdinalIgnoreCase))
             {
                 var lhsParts = line[..eqIdx].Trim()
                     .Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
@@ -502,7 +558,7 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent)
                 }
             }
             // Non-definition lines in a file: evaluate and print.
-            RunLine(line, env, false);
+            RunLine(line, env, false, maxSteps);
         }
         catch (Exception ex)
         {
@@ -510,6 +566,7 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent)
             errors++;
         }
     }
+    loadStack.Remove(path);
     if (!silent)
         Cwl($"  Loaded {path} — {defined} definition(s){(errors > 0 ? $", {errors} error(s)" : "")}", ConsoleColor.DarkGray);
 }
@@ -596,7 +653,7 @@ namespace SKI
 
     // ── Tokens ────────────────────────────────────────────────────────────────
 
-    enum TokenKind { LParen, RParen, Ident, Lambda, Dot, Number }
+    enum TokenKind { LParen, RParen, Ident, Lambda, Dot, Number, Let, In, Eq }
     record Token(TokenKind Kind, string Value, int Position);
 
     // ── Lexer ─────────────────────────────────────────────────────────────────
@@ -615,6 +672,7 @@ namespace SKI
                 if (ch == ')') { q.Enqueue(new Token(TokenKind.RParen, ")", i++)); continue; }
                 if (ch == '\\') { q.Enqueue(new Token(TokenKind.Lambda, "\\", i++)); continue; }
                 if (ch == '.')  { q.Enqueue(new Token(TokenKind.Dot,    ".",  i++)); continue; }
+                if (ch == '=')  { q.Enqueue(new Token(TokenKind.Eq,     "=",  i++)); continue; }
                 if (char.IsDigit(ch))
                 {
                     int start = i;
@@ -627,7 +685,14 @@ namespace SKI
                     int start = i;
                     while (i < source.Length && (char.IsLetterOrDigit(source[i]) || source[i] == '_'))
                         i++;
-                    q.Enqueue(new Token(TokenKind.Ident, source[start..i], start));
+                    var word = source[start..i];
+                    var kind = word switch
+                    {
+                        "let" => TokenKind.Let,
+                        "in"  => TokenKind.In,
+                        _     => TokenKind.Ident
+                    };
+                    q.Enqueue(new Token(kind, word, start));
                     continue;
                 }
                 throw new FormatException($"Unexpected character '{ch}' at column {i + 1}.");
@@ -656,6 +721,7 @@ namespace SKI
                 TokenKind.RParen  => throw new FormatException($"Unexpected ')' at column {tok.Position + 1}."),
                 TokenKind.Lambda  => ParseLambda(tokens, env),
                 TokenKind.Number  => BuildChurchNumeral(int.Parse(tok.Value)),
+                TokenKind.Let     => ParseLet(tokens, env, tok.Position),
                 _ => throw new FormatException($"Unexpected token '{tok.Value}' at column {tok.Position + 1}.")
             };
         }
@@ -698,6 +764,50 @@ namespace SKI
             var body = Parse(tokens, env);
             return BracketAbstract.AbstractAll(parms, body);
         }
+
+        // let x = e1 in e2  →  (\x. e2) e1
+        // Also supports:  let f x y = body in e2  (parameterized, like top-level defs)
+        private static Expr ParseLet(Queue<Token> tokens, Dictionary<string, Expr> env, int letPos)
+        {
+            // Collect binder name
+            if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.Ident)
+                throw new FormatException($"Expected name after 'let' (column {letPos + 1}).");
+            var name = tokens.Dequeue().Value;
+            if (Combinators.IsBuiltin(name))
+                throw new FormatException($"Cannot use built-in '{name}' as a let binder.");
+
+            // Optional parameters: let f x y = ...
+            var parms = new List<string>();
+            while (tokens.Count > 0 && tokens.Peek().Kind == TokenKind.Ident)
+            {
+                var p = tokens.Dequeue();
+                if (Combinators.IsBuiltin(p.Value))
+                    throw new FormatException($"Cannot use built-in '{p.Value}' as a parameter.");
+                parms.Add(p.Value);
+            }
+
+            // Consume '='
+            if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.Eq)
+                throw new FormatException($"Expected '=' in let binding (near column {letPos + 1}).");
+            tokens.Dequeue();
+
+            // Parse bound expression
+            var e1Raw = Parse(tokens, env);
+            var e1 = parms.Count > 0 ? BracketAbstract.AbstractAll(parms, e1Raw) : e1Raw;
+
+            // Consume 'in'
+            if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.In)
+                throw new FormatException($"Expected 'in' after let binding (near column {letPos + 1}).");
+            tokens.Dequeue();
+
+            // Parse body
+            var e2 = Parse(tokens, env);
+
+            // Desugar: ((\name. e2) e1)
+            var lambda = BracketAbstract.Abstract(name, e2);
+            return new App(lambda, e1);
+        }
+
 
         // ZERO = K I,  ONE = I,  n = S B (n-1) for n >= 2.
         // Satisfies: n f x = f^n x  (Church numeral encoding).
@@ -810,139 +920,325 @@ namespace SKI
 
     static class Reducer
     {
-        private const int MaxSteps = 1_000_000;
+        public const int DefaultMaxSteps = 1_000_000;
 
-        /// <summary>Fully reduces an expression using normal-order (outermost-leftmost) reduction.
-        /// Name references are resolved lazily during reduction — no pre-expansion needed.
+        /// <summary>Fully reduces an expression using graph reduction with sharing.
+        /// The immutable <see cref="Expr"/> tree is first converted to a mutable graph,
+        /// reduced in-place (sharing sub-graphs), then converted back for display.
         /// <paramref name="trace"/> receives each intermediate expression if non-null.</summary>
-        public static Expr Reduce(Expr expr, Dictionary<string, Expr> env, TextWriter? trace)
+        public static Expr Reduce(Expr expr, Dictionary<string, Expr> env, TextWriter? trace,
+                                  int maxSteps = DefaultMaxSteps)
         {
+            var root = Graph.FromExpr(expr, env);
             int step = 0;
-            for (; step < MaxSteps; step++)
+            for (; step < maxSteps; step++)
             {
-                var next = Step(expr, env);
-                if (next is null) return expr;   // normal form
+                if (!Graph.Step(root, env))
+                    break;   // normal form reached
                 if (trace is not null)
-                    trace.WriteLine($"  [{step + 1,6}] {next}");
-                expr = next;
+                    trace.WriteLine($"  [{step + 1,6}] {Graph.ToExpr(root)}");
             }
-            throw new InvalidOperationException($"Reduction did not terminate after {MaxSteps} steps.");
+            if (step == maxSteps)
+                throw new InvalidOperationException($"Reduction did not terminate after {maxSteps} steps.");
+            return Graph.ToExpr(root);
         }
 
         /// <summary>Like <see cref="Reduce"/> but also returns the step count.</summary>
-        public static (Expr Result, int Steps) ReduceWithCount(Expr expr, Dictionary<string, Expr> env)
+        public static (Expr Result, int Steps) ReduceWithCount(Expr expr, Dictionary<string, Expr> env,
+                                                                int maxSteps = DefaultMaxSteps)
         {
+            var root = Graph.FromExpr(expr, env);
             int step = 0;
-            for (; step < MaxSteps; step++)
+            for (; step < maxSteps; step++)
             {
-                var next = Step(expr, env);
-                if (next is null) return (expr, step);
-                expr = next;
+                if (!Graph.Step(root, env))
+                    return (Graph.ToExpr(root), step);
             }
-            throw new InvalidOperationException($"Reduction did not terminate after {MaxSteps} steps.");
+            throw new InvalidOperationException($"Reduction did not terminate after {maxSteps} steps.");
+        }
+    }
+
+    // ── Graph (mutable sharing graph for reduction) ───────────────────────────
+
+    /// <summary>
+    /// A mutable graph node. Each node is one of:
+    ///   App  — application, with Fun and Arg pointers (may be redirected)
+    ///   Atom — a combinator leaf (S K I B C W Y or sentinel)
+    ///   Name — an unresolved name reference (resolved lazily)
+    ///   Ind  — indirection: transparently forwards to another node (enables sharing)
+    ///
+    /// Reduction is done by the spine-walking algorithm (STG-style):
+    ///   1. Walk down the left spine collecting App nodes.
+    ///   2. When enough arguments are on the spine, fire the redex in-place.
+    ///   3. Overwrite the root App node with an Ind to the result (sharing).
+    ///   4. Return true if any reduction occurred.
+    /// </summary>
+    sealed class GNode
+    {
+        public enum Tag { App, Atom, Name, Ind }
+        public Tag Kind;
+
+        // App
+        public GNode? Fun;
+        public GNode? Arg;
+
+        // Atom (combinator / sentinel)
+        public char   AtomName;
+
+        // Name
+        public string? NameStr;
+
+        // Ind
+        public GNode? Fwd;
+
+        public static GNode MakeApp(GNode f, GNode a) => new() { Kind = Tag.App, Fun = f, Arg = a };
+        public static GNode MakeAtom(char c)          => new() { Kind = Tag.Atom, AtomName = c };
+        public static GNode MakeName(string n)        => new() { Kind = Tag.Name, NameStr = n };
+        public static GNode MakeInd(GNode to)         => new() { Kind = Tag.Ind, Fwd = to };
+
+        /// <summary>Dereference indirections in-place.</summary>
+        public static GNode Deref(GNode n)
+        {
+            while (n.Kind == Tag.Ind) n = n.Fwd!;
+            return n;
         }
 
-        /// <summary>
-        /// One outermost-leftmost reduction step using an explicit path (zipper).
-        /// Returns null when the expression is already in normal form.
-        ///
-        /// Stack entries encode the path from root to focus:
-        ///   (inFun=true,  other=arg) — descended into function position; arg is the sibling
-        ///   (inFun=false, other=fun) — descended into argument position; fun is the sibling
-        /// </summary>
-        private static Expr? Step(Expr root, Dictionary<string, Expr> env)
+        /// <summary>Overwrite this node to become an indirection to <paramref name="target"/>.</summary>
+        public void Redirect(GNode target)
         {
-            var path = new Stack<(bool inFun, Expr other)>(32);
-            var focus = root;
+            target = Deref(target);
+            if (target == this) return;
+            Kind = Tag.Ind;
+            Fwd  = target;
+            // Clear other fields to allow GC
+            Fun = null; Arg = null; NameStr = null;
+        }
+    }
 
-            while (true)
-            {
-                if (TryRedex(focus, env, out var reduced))
-                    return Rebuild(reduced, path);
+    static class Graph
+    {
+        // Pool of cached atom nodes (one per combinator letter)
+        private static readonly Dictionary<char, GNode> AtomPool = new();
 
-                if (focus is App(var f, var x))
-                {
-                    path.Push((true, x));   // go into function position
-                    focus = f;
-                    continue;
-                }
-
-                // Leaf (Combinator or unresolvable NameRef) — backtrack up the path
-                while (true)
-                {
-                    if (path.Count == 0) return null;       // whole tree is normal form
-
-                    var (inFun, other) = path.Pop();
-                    if (inFun)
-                    {
-                        // Finished function sub-tree; now explore argument
-                        path.Push((false, focus));
-                        focus = other;
-                        break;                              // continue outer loop
-                    }
-                    // Finished argument sub-tree; reconstruct and go up
-                    focus = new App(other, focus);
-                }
-            }
+        public static GNode Atom(char c)
+        {
+            if (!AtomPool.TryGetValue(c, out var n))
+                AtomPool[c] = n = GNode.MakeAtom(c);
+            return n;
         }
 
-        private static Expr Rebuild(Expr node, Stack<(bool inFun, Expr other)> path)
+        /// <summary>Convert an immutable <see cref="Expr"/> tree to a mutable graph.
+        /// <paramref name="env"/> is used to eagerly inline non-recursive NameRefs at the
+        /// graph boundary so that sharing kicks in immediately.</summary>
+        public static GNode FromExpr(Expr e, Dictionary<string, Expr> env)
         {
-            while (path.Count > 0)
+            // Use an explicit stack to avoid stack-overflow on deep trees
+            return Build(e, env, new Dictionary<Expr, GNode>(ReferenceEqualityComparer.Instance));
+        }
+
+        private static GNode Build(Expr e, Dictionary<string, Expr> env,
+                                   Dictionary<Expr, GNode> memo)
+        {
+            if (memo.TryGetValue(e, out var cached)) return cached;
+
+            GNode node;
+            switch (e)
             {
-                var (inFun, other) = path.Pop();
-                node = inFun
-                    ? new App(node, other)   // node is fun, other is arg
-                    : new App(other, node);  // other is fun, node is arg
+                case Combinator c:
+                    return Atom(c.Name);   // shared global atom, no memo needed
+
+                case NameRef(var name):
+                    node = GNode.MakeName(name);
+                    break;
+
+                case App(var f, var a):
+                    // Register placeholder before recursing to handle DAGs
+                    node = GNode.MakeApp(null!, null!);
+                    memo[e] = node;
+                    node.Fun = Build(f, env, memo);
+                    node.Arg = Build(a, env, memo);
+                    return node;
+
+                default:
+                    return Atom('?');
             }
+
+            memo[e] = node;
             return node;
         }
 
-        private static bool TryRedex(Expr expr, Dictionary<string, Expr> env, out Expr result)
+        /// <summary>Convert a (possibly-reduced) graph back to an immutable <see cref="Expr"/>
+        /// for printing. Handles cycles via a visited set (shouldn't occur in well-typed terms).</summary>
+        public static Expr ToExpr(GNode n)
         {
-            // NameRef — resolve lazily from the environment
-            if (expr is NameRef(var refName))
+            return Convert(GNode.Deref(n), new HashSet<GNode>(ReferenceEqualityComparer.Instance));
+        }
+
+        private static Expr Convert(GNode n, HashSet<GNode> visited)
+        {
+            n = GNode.Deref(n);
+            if (!visited.Add(n))
+                return new NameRef("…");   // cycle guard (shouldn't happen normally)
+
+            switch (n.Kind)
             {
-                if (env.TryGetValue(refName, out var def))
-                { result = def; return true; }
-                // Undefined name stays as-is (will surface as a stuck term)
-                result = default!;
-                return false;
+                case GNode.Tag.Atom:
+                    return new Combinator(n.AtomName);
+                case GNode.Tag.Name:
+                    return new NameRef(n.NameStr!);
+                case GNode.Tag.App:
+                    var f = Convert(GNode.Deref(n.Fun!), visited);
+                    var a = Convert(GNode.Deref(n.Arg!), visited);
+                    visited.Remove(n);
+                    return new App(f, a);
+                default:
+                    return new NameRef("?");
+            }
+        }
+
+        /// <summary>
+        /// One full outermost-leftmost reduction step on the graph.
+        /// Returns true if a step was taken, false if in normal form.
+        ///
+        /// Algorithm:
+        ///   Walk the left spine collecting App nodes.
+        ///   When we reach a head (Atom or Name), check if there are enough args.
+        ///   If so, fire the redex by overwriting the topmost App with an Ind.
+        /// </summary>
+        public static bool Step(GNode root, Dictionary<string, Expr> env)
+        {
+            // spine[0] = topmost App on the way down, spine[last] = nearest App to head
+            var spine = new List<GNode>(16);
+            var focus = GNode.Deref(root);
+
+            // Walk left spine
+            while (focus.Kind == GNode.Tag.App)
+            {
+                spine.Add(focus);
+                focus = GNode.Deref(focus.Fun!);
             }
 
-            // I x  →  x
-            if (expr is App(Combinator { Name: 'I' }, var x))
-            { result = x; return true; }
+            // Resolve name lazily
+            if (focus.Kind == GNode.Tag.Name)
+            {
+                if (!env.TryGetValue(focus.NameStr!, out var def))
+                    return false;   // undefined — stuck
+                var replacement = Build(def, env, new Dictionary<Expr, GNode>(ReferenceEqualityComparer.Instance));
+                // Overwrite the Name node to redirect — but it's shared as an atom,
+                // so overwrite the nearest App's Fun pointer instead, or overwrite focus
+                focus.Kind    = replacement.Kind;
+                focus.Fun     = replacement.Fun;
+                focus.Arg     = replacement.Arg;
+                focus.AtomName= replacement.AtomName;
+                focus.NameStr = replacement.NameStr;
+                focus.Fwd     = replacement.Fwd;
+                return true;
+            }
 
-            // I applied lazily: if the function position holds a NameRef that resolves to I
-            // (handled by the NameRef case above — the ref is replaced first, then re-evaluated)
+            if (focus.Kind != GNode.Tag.Atom) return false;
 
-            // K x y  →  x
-            if (expr is App(App(Combinator { Name: 'K' }, var kx), _))
-            { result = kx; return true; }
+            int arity = spine.Count;
+            char head = focus.AtomName;
 
-            // S x y z  →  (x z)(y z)
-            if (expr is App(App(App(Combinator { Name: 'S' }, var sx), var sy), var sz))
-            { result = new App(new App(sx, sz), new App(sy, sz)); return true; }
+            // Helper: get the Arg of the k-th App from the top of the spine (0 = nearest to head)
+            GNode GetArg(int k) => GNode.Deref(spine[spine.Count - 1 - k].Arg!);
+            // The redex root = spine[spine.Count - 1 - (needed-1)] — the App that has all args
+            GNode RedexRoot(int needed) => spine[spine.Count - needed];
 
-            // B x y z  →  x (y z)
-            if (expr is App(App(App(Combinator { Name: 'B' }, var bx), var by), var bz))
-            { result = new App(bx, new App(by, bz)); return true; }
+            switch (head)
+            {
+                case 'I' when arity >= 1:
+                {
+                    // I x → x   : overwrite (I x) app with indirection to x
+                    var rx = RedexRoot(1);
+                    rx.Redirect(GetArg(0));
+                    return true;
+                }
+                case 'K' when arity >= 2:
+                {
+                    // K x y → x  (x is first/deepest arg = GetArg(0))
+                    var rx = RedexRoot(2);
+                    rx.Redirect(GetArg(0));
+                    return true;
+                }
+                case 'S' when arity >= 3:
+                {
+                    // S x y z → (x z)(y z)
+                    // GetArg(0)=x (first applied), GetArg(1)=y, GetArg(2)=z (last applied)
+                    var x = GetArg(0); var y = GetArg(1); var z = GetArg(2);
+                    // Share z: both branches point to the same node
+                    var newNode = GNode.MakeApp(GNode.MakeApp(x, z), GNode.MakeApp(y, z));
+                    RedexRoot(3).Redirect(newNode);
+                    return true;
+                }
+                case 'B' when arity >= 3:
+                {
+                    // B x y z → x (y z)
+                    var x = GetArg(0); var y = GetArg(1); var z = GetArg(2);
+                    RedexRoot(3).Redirect(GNode.MakeApp(x, GNode.MakeApp(y, z)));
+                    return true;
+                }
+                case 'C' when arity >= 3:
+                {
+                    // C x y z → x z y
+                    var x = GetArg(0); var y = GetArg(1); var z = GetArg(2);
+                    RedexRoot(3).Redirect(GNode.MakeApp(GNode.MakeApp(x, z), y));
+                    return true;
+                }
+                case 'W' when arity >= 2:
+                {
+                    // W x y → x y y   (y is shared)
+                    var x = GetArg(0); var y = GetArg(1);
+                    RedexRoot(2).Redirect(GNode.MakeApp(GNode.MakeApp(x, y), y));
+                    return true;
+                }
+                case 'Y' when arity >= 2:
+                {
+                    // (Y f) x → f (Y f) x    [lazy: only when applied to an arg]
+                    // f is first applied arg, x is second
+                    var f = GetArg(0); var x = GetArg(1);
+                    var yf = GNode.MakeApp(Atom('Y'), f);
+                    RedexRoot(2).Redirect(GNode.MakeApp(GNode.MakeApp(f, yf), x));
+                    return true;
+                }
+                default:
+                    // Not enough args or unknown combinator — try to normalise inside args
+                    // (normal-order: after the head is stuck, reduce leftmost arg)
+                    return StepInArgs(spine, env);
+            }
+        }
 
-            // C x y z  →  x z y
-            if (expr is App(App(App(Combinator { Name: 'C' }, var cx), var cy), var cz))
-            { result = new App(new App(cx, cz), cy); return true; }
+        /// <summary>
+        /// When the head is stuck (too few args), walk into arguments left-to-right
+        /// trying to find a reducible sub-expression (normal-order strategy).
+        /// </summary>
+        private static bool StepInArgs(List<GNode> spine, Dictionary<string, Expr> env)
+        {
+            // Traverse spine from innermost to outermost (leftmost-first normal order)
+            for (int i = spine.Count - 1; i >= 0; i--)
+            {
+                var argNode = GNode.Deref(spine[i].Arg!);
+                // Try to reduce the arg sub-tree
+                if (StepSub(argNode, env))
+                    return true;
+            }
+            return false;
+        }
 
-            // W x y  →  x y y
-            if (expr is App(App(Combinator { Name: 'W' }, var wx), var wy))
-            { result = new App(new App(wx, wy), wy); return true; }
-
-            // (Y f) x  →  f (Y f) x     [lazy: only unfolds when applied to an argument]
-            // "Y f" alone is stuck (weak-head normal form), preventing runaway tree growth.
-            if (expr is App(App(Combinator { Name: 'Y' }, var yf), var yx))
-            { result = new App(new App(yf, new App(Combinators.Y, yf)), yx); return true; }
-
-            result = default!;
+        /// <summary>Recursively step inside a sub-graph (for normal-order reduction of args).</summary>
+        private static bool StepSub(GNode n, Dictionary<string, Expr> env)
+        {
+            n = GNode.Deref(n);
+            if (n.Kind == GNode.Tag.App)
+                return Step(n, env);
+            if (n.Kind == GNode.Tag.Name)
+            {
+                if (!env.TryGetValue(n.NameStr!, out var def)) return false;
+                var rep = Build(def, env, new Dictionary<Expr, GNode>(ReferenceEqualityComparer.Instance));
+                n.Kind = rep.Kind; n.Fun = rep.Fun; n.Arg = rep.Arg;
+                n.AtomName = rep.AtomName; n.NameStr = rep.NameStr; n.Fwd = rep.Fwd;
+                return true;
+            }
             return false;
         }
     }
@@ -953,51 +1249,15 @@ namespace SKI
     {
         private const int MaxN = 10_000;
 
-        /// <summary>
-        /// Decodes a fully-reduced Church numeral by applying it to a counter function.
-        /// Strategy: reduce (n SUCC_MARKER ZERO_MARKER) step by step, counting I-like
-        /// unfolding — or simply apply n to a fresh sentinel and count applications.
-        ///
-        /// Practical approach: reduce (expr f z) where f = a fresh "tick" name that
-        /// increments a counter, using a lightweight direct evaluation.
-        /// We use the algebraic identity: a normal-form Church numeral n applied to
-        /// SUCC and ZERO should reduce to the n-th numeral literal.  Instead we
-        /// evaluate n applied to a sentinel successor atom and a sentinel zero atom
-        /// and count how many times the successor appears in the spine.
-        /// </summary>
-        public static int? Decode(Expr result, Dictionary<string, Expr> env)
+        public static int? Decode(Expr result, Dictionary<string, Expr> env,
+                                  int maxSteps = Reducer.DefaultMaxSteps)
         {
-            // Strategy: apply the result to a fresh sentinel successor S' and a fresh
-            // sentinel zero Z', reduce, then count the depth of the S'-application
-            // spine in the output.
-            //
-            // We use single-character sentinel atoms that cannot appear in any real
-            // SKI expression (they're outside A-Z and not valid identifiers), stored
-            // as Combinator nodes with custom names.
-            var tick = new Combinator('\u0001');   // successor sentinel (non-printable)
-            var zero = new Combinator('\u0002');   // zero sentinel
-
-            // Build ((result tick) zero) and reduce it.
+            var tick = new Combinator('\u0001');
+            var zero = new Combinator('\u0002');
             Expr applied = new App(new App(result, tick), zero);
-
-            // Use a local env copy that maps the sentinels if needed (they have no
-            // reduction rules so they stay as atoms — exactly what we want).
             Expr reduced;
-            try
-            {
-                reduced = Reducer.Reduce(applied, env, null);
-            }
-            catch
-            {
-                return null;
-            }
-
-            // Now count how many times `tick` wraps around `zero` in the result.
-            // A Church n applied to tick and zero produces:
-            //   n=0: zero
-            //   n=1: (tick zero)
-            //   n=2: (tick (tick zero))
-            //   n=k: (tick^k zero)
+            try { reduced = Reducer.Reduce(applied, env, null, maxSteps); }
+            catch { return null; }
             return CountTickSpine(reduced, tick, zero);
         }
 
@@ -1023,20 +1283,15 @@ namespace SKI
 
     static class ChurchBool
     {
-        /// <summary>
-        /// Decodes a Church boolean by applying it to two distinct sentinel atoms
-        /// and checking which one comes out after reduction.
-        /// TRUE  = K  → selects first  → returns trueS
-        /// FALSE = KI → selects second → returns falseS
-        /// </summary>
-        public static bool? Decode(Expr result, Dictionary<string, Expr> env)
+        public static bool? Decode(Expr result, Dictionary<string, Expr> env,
+                                   int maxSteps = Reducer.DefaultMaxSteps)
         {
-            var trueS  = new Combinator('\u0003');   // sentinel "true"  atom
-            var falseS = new Combinator('\u0004');   // sentinel "false" atom
+            var trueS  = new Combinator('\u0003');
+            var falseS = new Combinator('\u0004');
             Expr applied = new App(new App(result, trueS), falseS);
             try
             {
-                var reduced = Reducer.Reduce(applied, env, null);
+                var reduced = Reducer.Reduce(applied, env, null, maxSteps);
                 if (reduced == trueS)  return true;
                 if (reduced == falseS) return false;
                 return null;
@@ -1051,11 +1306,8 @@ namespace SKI
     {
         private const int MaxLen = 256;
 
-        /// <summary>
-        /// Decodes a Church-encoded list by applying ISNIL / HEAD / TAIL from <paramref name="env"/>.
-        /// Returns null if the result is not a Church list or the required names are undefined.
-        /// </summary>
-        public static List<Expr>? Decode(Expr result, Dictionary<string, Expr> env)
+        public static List<Expr>? Decode(Expr result, Dictionary<string, Expr> env,
+                                         int maxSteps = Reducer.DefaultMaxSteps)
         {
             if (!env.TryGetValue("ISNIL", out var isNilDef) ||
                 !env.TryGetValue("HEAD",  out var headDef)  ||
@@ -1068,13 +1320,13 @@ namespace SKI
             {
                 try
                 {
-                    var isNilResult = Reducer.Reduce(new App(isNilDef, current), env, null);
-                    var isNil = ChurchBool.Decode(isNilResult, env);
+                    var isNilResult = Reducer.Reduce(new App(isNilDef, current), env, null, maxSteps);
+                    var isNil = ChurchBool.Decode(isNilResult, env, maxSteps);
                     if (isNil is true)  return items;
                     if (isNil is not false) return null;
-                    if (i == MaxLen) return null;  // too long
-                    items.Add(Reducer.Reduce(new App(headDef, current), env, null));
-                    current = Reducer.Reduce(new App(tailDef, current), env, null);
+                    if (i == MaxLen) return null;
+                    items.Add(Reducer.Reduce(new App(headDef, current), env, null, maxSteps));
+                    current = Reducer.Reduce(new App(tailDef, current), env, null, maxSteps);
                 }
                 catch { return null; }
             }
@@ -1103,6 +1355,50 @@ namespace SKI
             Console.ForegroundColor = _color;
             Console.Write(value);
             Console.ResetColor();
+        }
+    }
+
+    // ── REPL tab-completion ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Provides tab-completion for the ReadLine REPL:
+    ///   - All user-defined names from the environment
+    ///   - Built-in combinators S K I B C W Y
+    ///   - REPL commands  :load :save :env :def :undef :expand :nat :bool :list
+    ///                    :bench :trace :set :reset :reload :help
+    /// </summary>
+    sealed class SkiAutoComplete : IAutoCompleteHandler
+    {
+        private static readonly string[] Commands =
+        [
+            ":load", ":save", ":env", ":def", ":undef", ":expand",
+            ":nat", ":bool", ":list", ":bench", ":trace",
+            ":set", ":reset", ":reload", ":help", ":?",
+            "exit"
+        ];
+
+        private static readonly string[] Builtins = ["S", "K", "I", "B", "C", "W", "Y"];
+
+        private readonly Func<Dictionary<string, Expr>> _getEnv;
+
+        public SkiAutoComplete(Func<Dictionary<string, Expr>> getEnv) => _getEnv = getEnv;
+
+        public char[] Separators { get; set; } = [' ', '(', ')'];
+
+        public string[] GetSuggestions(string text, int index)
+        {
+            // Find the word being completed (token starting at 'index')
+            var word = text[index..];
+            var env = _getEnv();
+
+            IEnumerable<string> candidates = word.StartsWith(':')
+                ? Commands
+                : Builtins.Concat(env.Keys);
+
+            return candidates
+                .Where(c => c.StartsWith(word, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(c => c)
+                .ToArray();
         }
     }
 }
