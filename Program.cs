@@ -1077,16 +1077,21 @@ namespace SKI
         private static Expr Convert(GNode n, HashSet<GNode> visited)
         {
             n = GNode.Deref(n);
-            if (!visited.Add(n))
-                return new NameRef("…");   // cycle guard (shouldn't happen normally)
 
             switch (n.Kind)
             {
                 case GNode.Tag.Atom:
+                    // Atoms come from AtomPool and are shared across the whole graph.
+                    // They can never form a cycle, so bypass the visited check entirely.
                     return new Combinator(n.AtomName);
                 case GNode.Tag.Name:
                     return new NameRef(n.NameStr!);
                 case GNode.Tag.App:
+                    // Track App nodes on the current DFS path to catch true cycles.
+                    // Remove after processing so the same node can be re-entered from
+                    // a sibling branch (sharing is fine; only back-edges are cycles).
+                    if (!visited.Add(n))
+                        return new NameRef("…");   // true cycle — should not occur in well-formed terms
                     var f = Convert(GNode.Deref(n.Fun!), visited);
                     var a = Convert(GNode.Deref(n.Arg!), visited);
                     visited.Remove(n);
