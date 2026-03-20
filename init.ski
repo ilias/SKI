@@ -22,8 +22,8 @@ FALSE   = (K I)
 # NOT p x y = p y x  =>  C
 NOT     = C
 
-# AND p q = p q FALSE  =>  S S (K FALSE)
-AND     = ((S S) (K FALSE))
+# AND p q = p q FALSE  =>  C S (K FALSE)
+AND     = ((C S) (K FALSE))
 
 # OR  p q = p TRUE q  =>  S (K TRUE) I ... but we need curried: S I (K TRUE)
 OR      = ((S I) (K TRUE))
@@ -47,11 +47,11 @@ OR      = ((S I) (K TRUE))
 # XOR = (S ((B OR) ((B AND) NOT)) ((B AND) (K NOT)))  -- defines in terms of others
 # Actually simpler to just test: (S (K (S (K NOT))) S)(K I) -- no
 # Let's go with the readable form using existing names:
-XOR     = ((S ((B OR) ((B AND) NOT))) ((B AND) (K NOT)))
+XOR     = ((C ((B S) ((C B) NOT))) I)
 
 # NAND/NOR
-NAND    = ((B NOT) AND)
-NOR     = ((B NOT) OR)
+NAND    = ((B (B NOT)) AND)
+NOR     = ((B (B NOT)) OR)
 
 # IF b t e = b t e  (bool is already a selector; IF = I)
 IF      = I
@@ -92,32 +92,33 @@ MUL     = B
 # POW m n = n m  (apply m n times)  =>  C I  (flip identity)
 POW     = (C I)
 
-# PRED via Pair-shift:
-# step p = PAIR (SND p) (SUCC (SND p))
-# PRED n f x = FST (n step (PAIR x x))
+# PRED via Pair-shift (seed = PAIR ZERO ZERO):
+# STEP p = PAIR (SND p) (SUCC (SND p))
+# PRED n  = FST (n STEP (PAIR ZERO ZERO))
+#         = B FST (C (S I (K STEP)) (PAIR ZERO ZERO))
 STEP    = ((S ((B PAIR) SND)) ((B SUCC) SND))
-PRED    = ((B FST) ((C ((B B) (B STEP))) ((S PAIR) I)))
+PRED    = ((B FST) ((C ((S I) (K STEP))) ((PAIR ZERO) ZERO)))
 
-# SUB m n = n PRED m
-SUB     = ((C ((B B) (B PRED))) I)
+# SUB m n = n PRED m  =>  B (S (S I (K PRED))) K
+SUB     = ((B (S ((S I) (K PRED)))) K)
 
 # ISZERO n = n (K FALSE) TRUE
 ISZERO  = ((C ((S I) (K (K FALSE)))) TRUE)
 
-# LEQ m n = ISZERO (SUB m n)
-LEQ     = ((B ISZERO) SUB)
+# LEQ m n = ISZERO (SUB m n)  =>  B (B ISZERO) SUB
+LEQ     = ((B (B ISZERO)) SUB)
 
-# EQ  m n = AND (LEQ m n) (LEQ n m)
-EQ      = ((S ((B AND) LEQ)) ((C LEQ) I))
+# EQ  m n = AND (LEQ m n) (LEQ n m)  =>  S (B S (B (B AND) LEQ)) (C LEQ)
+EQ      = ((S ((B S) ((B (B AND)) LEQ))) (C LEQ))
 
-# GEQ m n = LEQ n m
+# GEQ m n = LEQ n m  =>  C LEQ
 GEQ     = (C LEQ)
 
-# GT  m n = NOT (LEQ m n)
-GT      = ((B NOT) LEQ)
+# GT  m n = NOT (LEQ m n)  =>  B (B NOT) LEQ
+GT      = ((B (B NOT)) LEQ)
 
-# LT  m n = NOT (LEQ n m)  = NOT (GEQ m n)
-LT      = ((B NOT) GEQ)
+# LT  m n = NOT (GEQ m n)  =>  B (B NOT) GEQ
+LT      = ((B (B NOT)) GEQ)
 
 # ============================================================================
 # CHURCH LISTS  (Scott / Church cons: cons h t = PAIR FALSE (PAIR h t))
@@ -127,9 +128,9 @@ LT      = ((B NOT) GEQ)
 #   head   l  = FST (SND l)
 #   tail   l  = SND (SND l)
 # ============================================================================
-NIL     = TRUE
+NIL     = ((PAIR TRUE) I)
 ISNIL   = FST
-CONS    = ((B (PAIR FALSE)) PAIR)
+CONS    = (S (K (B (PAIR FALSE))) PAIR)
 HEAD    = ((B FST) SND)
 TAIL    = ((B SND) SND)
 
@@ -146,11 +147,64 @@ TWICE   = (W B)
 # THRICE f x = f (f (f x))  =  THREE COMPOSE  ... but MUL THREE COMPOSE = B(Bf)(Bf)
 # Simplest: TWO applied to COMPOSE gives (B . B) . f = B(Bf), so THRICE = MUL THREE
 # Actually: THREE B f = B(Bf)(B(Bf)) ... complex. Just use:
-THRICE  = ((MUL THREE) B)
+THRICE  = THREE
 
 # ON g f x y = g (f x) (f y)   Psi combinator
-# PSI g f x y = g(fx)(fy)  =  B(BS)B g f  applied to x and y
-ON      = ((B ((B S) B)) B)
+# Derivation: on_g_f_x = B(g(fx)) f
+#             -> on_g_f = S(BB(Bgf))(Kf)
+#             -> on_g   = S(B(S(BB))(Bg)) K
+#             -> ON     = B(S(BB(CB))) B
+ON      = ((B (S ((B B) (C B)))) B)
 
 # ITERATE n f x = f^n x  (same as Church numeral application, alias for clarity)
 ITERATE = I
+
+# ============================================================================
+# CHURCH NUMERAL UTILITIES
+# ============================================================================
+
+# MAX m n = the larger of m and n = (GEQ m n) m n
+# Derivation: MAX m = S (S (GEQ m) (K m)) I
+#             MAX   = C (B S (S (B S GEQ) K)) I
+MAX     = (C ((B S) ((S ((B S) GEQ)) K)) I)
+
+# MIN m n = the smaller of m and n = (LEQ m n) m n
+# Symmetric to MAX, replace GEQ with LEQ
+MIN     = (C ((B S) ((S ((B S) LEQ)) K)) I)
+
+# EVEN n = TRUE iff n is even  — apply NOT n times to TRUE
+# EVEN n = n NOT TRUE  =>  S (C I NOT) (K TRUE)
+EVEN    = ((S ((C I) NOT)) (K TRUE))
+
+# ODD n = NOT (EVEN n)  =>  B NOT EVEN
+ODD     = ((B NOT) EVEN)
+
+# ============================================================================
+# CHURCH PAIR UTILITIES
+# ============================================================================
+
+# CURRY f x y = f (PAIR x y)  — convert a pair-consuming function to curried form
+# Derivation: CURRY f = B (B f) PAIR  =>  CURRY = C (B B B) PAIR
+CURRY   = ((C ((B B) B)) PAIR)
+
+# UNCURRY f p = f (FST p) (SND p)  — apply a curried function to a pair
+# Derivation: UNCURRY f = S (B f FST) SND
+#             UNCURRY   = C (B S (C B FST)) SND
+UNCURRY = (C ((B S) ((C B) FST)) SND)
+
+# ============================================================================
+# CHURCH LIST UTILITIES
+# ============================================================================
+
+# SECOND l = HEAD (TAIL l)  — second element of a list
+SECOND  = ((B HEAD) TAIL)
+
+# SINGLETON x = CONS x NIL  — list containing exactly one element
+SINGLETON = ((C CONS) NIL)
+
+# LENGTH l  — Church numeral representing the number of elements in l
+# Fixed-point body F: F r l = ISNIL l ZERO (SUCC (r (TAIL l)))
+#   Abstracting l:  F r = S (S ISNIL (K ZERO)) (B SUCC (B r TAIL))
+#   Abstracting r:  F   = B (S (S ISNIL (K ZERO))) (B (B SUCC) (C B TAIL))
+# Note: (S ((S ISNIL) (K ZERO))) = S applied to the 2-arg partial (S ISNIL (K ZERO))
+LENGTH  = (Y ((B (S ((S ISNIL) (K ZERO)))) ((B (B SUCC)) ((C B) TAIL))))

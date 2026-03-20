@@ -354,7 +354,7 @@ namespace SKI
 
     static class Reducer
     {
-        private const int MaxSteps = 10_000;
+        private const int MaxSteps = 1_000_000;
 
         /// <summary>Fully reduces an expression using normal-order (outermost-leftmost) reduction.</summary>
         public static Expr Reduce(Expr expr)

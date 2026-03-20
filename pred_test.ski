@@ -1,0 +1,10 @@
+# Test PRED fix
+P0 = (PRED ZERO)
+P1 = (PRED ONE)
+P2 = (PRED TWO)
+P3 = (PRED THREE)
+# Each should print S (TRUE = equal)
+(((EQ P0 ZERO) S) K)
+(((EQ P1 ZERO) S) K)
+(((EQ P2 ONE) S) K)
+(((EQ P3 TWO) S) K)

@@ -1,0 +1,6 @@
+# Simple ON test
+# ON K K S K = K(KS)(KK) = KS
+# So (ON K K S K) S = KS S = S (since KS applied to any arg = S)
+((((ON K) K) S) K)
+# ON K K S K S should = S:
+(((((ON K) K) S) K) S)

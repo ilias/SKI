@@ -1,0 +1,11 @@
+# Debug ON
+P23 = (PAIR TWO THREE)
+P14 = (PAIR ONE FOUR)
+# Basic FST check
+(FST P23)
+(FST P14)
+# what ON ADD FST gives
+ONADD = ((ON ADD) FST)
+ONADD_P23 = (ONADD P23)
+ONADD_P23
+(ONADD_P23 P14)
