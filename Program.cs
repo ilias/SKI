@@ -70,11 +70,11 @@ else
             if (initPath is not null)
             {
                 LoadFile(initPath, env, silent: true);
-                Console.WriteLine($"  Reset — reloaded {initPath} ({env.Count} definition(s))");
+                Cwl($"  Reset — reloaded {initPath} ({env.Count} definition(s))", ConsoleColor.DarkCyan);
             }
             else
             {
-                Console.WriteLine("  Reset — environment cleared");
+                Cwl("  Reset — environment cleared", ConsoleColor.DarkCyan);
             }
             continue;
         }
@@ -83,7 +83,8 @@ else
         if (trimmed.Equals(":trace", StringComparison.OrdinalIgnoreCase))
         {
             traceMode = !traceMode;
-            Console.WriteLine($"  Trace : {(traceMode ? "ON" : "OFF")}");
+            Cwl($"  Trace : {(traceMode ? "ON" : "OFF")}",
+                traceMode ? ConsoleColor.Green : ConsoleColor.DarkGray);
             continue;
         }
 
@@ -92,7 +93,7 @@ else
         {
             var rest = trimmed[7..].Trim();
             if (rest.Length == 0)
-                Console.WriteLine("  Usage: :expand <expr>");
+                Cwl("  Usage: :expand <expr>", ConsoleColor.DarkGray);
             else
                 ExpandLine(rest, env);
             continue;
@@ -103,7 +104,7 @@ else
         {
             var rest = trimmed[4..].Trim();
             if (rest.Length == 0)
-                Console.WriteLine("  Usage: :nat <expr>");
+                Cwl("  Usage: :nat <expr>", ConsoleColor.DarkGray);
             else
                 NatLine(rest, env);
             continue;
@@ -163,9 +164,9 @@ static void RunLine(string input, Dictionary<string, Expr> env, bool trace)
                     throw new FormatException("Unexpected tokens after definition body.");
                 // Warn if the name directly references itself in its own body.
                 if (Expander.ContainsName(body, namePart))
-                    Console.WriteLine($"  Warning: '{namePart}' references itself — use Y for recursion");
+                    Cwl($"  Warning: '{namePart}' references itself — use Y for recursion", ConsoleColor.Yellow);
                 env[namePart] = body;
-                Console.WriteLine($"  Defined {namePart} = {body}");
+                Cwl($"  Defined {namePart} = {body}", ConsoleColor.DarkGreen);
                 return;
             }
         }
@@ -175,13 +176,13 @@ static void RunLine(string input, Dictionary<string, Expr> env, bool trace)
         var expr = Parser.Parse(tokens, env);
         if (tokens.Count > 0)
             throw new FormatException("Unexpected tokens after expression.");
-        Console.WriteLine($"  Parsed : {expr}");
-        var result = Reducer.Reduce(expr, env, trace ? Console.Out : null);
-        Console.WriteLine($"  Result : {result}");
+        Cwl($"  Parsed : {expr}", ConsoleColor.DarkGray);
+        var result = Reducer.Reduce(expr, env, trace ? new ColorWriter(ConsoleColor.DarkGray) : null);
+        Cwl($"  Result : {result}", ConsoleColor.Cyan);
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"  Error  : {ex.Message}");
+        Cwl($"  Error  : {ex.Message}", ConsoleColor.Red);
     }
 }
 
@@ -194,11 +195,11 @@ static void ExpandLine(string input, Dictionary<string, Expr> env)
         if (tokens.Count > 0)
             throw new FormatException("Unexpected tokens after expression.");
         var expanded = Expander.Expand(expr, env);
-        Console.WriteLine($"  Expanded: {expanded}");
+        Cwl($"  Expanded: {expanded}", ConsoleColor.Cyan);
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"  Error  : {ex.Message}");
+        Cwl($"  Error  : {ex.Message}", ConsoleColor.Red);
     }
 }
 
@@ -211,16 +212,16 @@ static void NatLine(string input, Dictionary<string, Expr> env)
         if (tokens.Count > 0)
             throw new FormatException("Unexpected tokens after expression.");
         var result = Reducer.Reduce(expr, env, null);
-        Console.WriteLine($"  Result : {result}");
+        Cwl($"  Result : {result}", ConsoleColor.DarkGray);
         var n = ChurchNat.Decode(result, env);
         if (n is not null)
-            Console.WriteLine($"  Nat    : {n}");
+            Cwl($"  Nat    : {n}", ConsoleColor.Green);
         else
-            Console.WriteLine("  Nat    : (not a Church numeral or exceeds decode limit)");
+            Cwl("  Nat    : (not a Church numeral or exceeds decode limit)", ConsoleColor.DarkYellow);
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"  Error  : {ex.Message}");
+        Cwl($"  Error  : {ex.Message}", ConsoleColor.Red);
     }
 }
 
@@ -228,12 +229,19 @@ static bool IsIdent(string s) =>
     s.Length > 0 && char.IsLetter(s[0]) &&
     s.All(c => char.IsLetterOrDigit(c) || c == '_');
 
+static void Cwl(string text, ConsoleColor color)
+{
+    Console.ForegroundColor = color;
+    Console.WriteLine(text);
+    Console.ResetColor();
+}
+
 /// <summary>Loads and executes every non-blank, non-comment line in a .ski file.</summary>
 static void LoadFile(string path, Dictionary<string, Expr> env, bool silent)
 {
     if (!File.Exists(path))
     {
-        Console.WriteLine($"  Error  : File not found: '{path}'");
+        Cwl($"  Error  : File not found: '{path}'", ConsoleColor.Red);
         return;
     }
     int defined = 0, errors = 0;
@@ -260,7 +268,7 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent)
                     if (bodyTokens.Count > 0)
                         throw new FormatException("Unexpected tokens after definition body.");
                     env[namePart] = body;
-                    if (!silent) Console.WriteLine($"  Defined {namePart} = {body}");
+                    if (!silent) Cwl($"  Defined {namePart} = {body}", ConsoleColor.DarkGreen);
                     defined++;
                     continue;
                 }
@@ -270,12 +278,12 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent)
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  Error  : {path}: {ex.Message}");
+            Cwl($"  Error  : {path}: {ex.Message}", ConsoleColor.Red);
             errors++;
         }
     }
     if (!silent)
-        Console.WriteLine($"  Loaded {path} — {defined} definition(s){(errors > 0 ? $", {errors} error(s)" : "")}");
+        Cwl($"  Loaded {path} — {defined} definition(s){(errors > 0 ? $", {errors} error(s)" : "")}", ConsoleColor.DarkGray);
 }
 
 /// <summary>Searches for init.ski next to the exe, then in the working directory.</summary>
@@ -298,18 +306,23 @@ static void PrintEnv(Dictionary<string, Expr> env, string? pattern)
 
     if (entries.Count == 0)
     {
-        Console.WriteLine(pattern is null
+        Cwl(pattern is null
             ? "  (no definitions)"
-            : $"  (no definitions matching '{pattern}')");
+            : $"  (no definitions matching '{pattern}')", ConsoleColor.DarkGray);
         return;
     }
 
     int nameWidth = entries.Max(kv => kv.Key.Length);
     foreach (var (name, body) in entries)
-        Console.WriteLine($"  {name.PadRight(nameWidth)} = {body}");
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.Write($"  {name.PadRight(nameWidth)}");
+        Console.ResetColor();
+        Console.WriteLine($" = {body}");
+    }
 
-    Console.WriteLine($"  ---\n  {entries.Count} definition(s)" +
-                      (pattern is not null ? $" matching '{pattern}'" : ""));
+    Cwl($"  ---\n  {entries.Count} definition(s)" +
+        (pattern is not null ? $" matching '{pattern}'" : ""), ConsoleColor.DarkGray);
 }
 
 namespace SKI
@@ -666,5 +679,28 @@ namespace SKI
             }
         }
     }
-}
 
+    // ── Colored console writer ────────────────────────────────────────────────
+
+    /// <summary>A TextWriter that prints each line to the console in a given color.</summary>
+    sealed class ColorWriter : TextWriter
+    {
+        private readonly ConsoleColor _color;
+        public ColorWriter(ConsoleColor color) => _color = color;
+        public override System.Text.Encoding Encoding => Console.Out.Encoding;
+
+        public override void WriteLine(string? value)
+        {
+            Console.ForegroundColor = _color;
+            Console.WriteLine(value);
+            Console.ResetColor();
+        }
+
+        public override void Write(string? value)
+        {
+            Console.ForegroundColor = _color;
+            Console.Write(value);
+            Console.ResetColor();
+        }
+    }
+}
