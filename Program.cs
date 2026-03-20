@@ -33,7 +33,7 @@ if (args.Length > 0)
 else
 {
     Console.WriteLine("SKI(BCWY) Combinator Interpreter");
-    Console.WriteLine("Syntax : (expr expr) for application");
+    Console.WriteLine("Syntax : (f a b c) = left-assoc application  |  (f a) = binary");
     Console.WriteLine("Atoms  : S  K  I  B  C  W  Y  <Name>");
     Console.WriteLine("Define : Name = expr");
     Console.WriteLine("Load   : :load <file.ski>");
@@ -303,14 +303,21 @@ namespace SKI
 
         private static Expr ParseApp(Queue<Token> tokens, Dictionary<string, Expr> env)
         {
-            var fun = Parse(tokens, env);
-            var arg = Parse(tokens, env);
+            // Parse the function and at least one argument, then keep consuming
+            // additional arguments until ')' — left-associative: (f a b c) = (((f a) b) c).
+            var result = Parse(tokens, env);
 
-            if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.RParen)
+            if (tokens.Count == 0 || tokens.Peek().Kind == TokenKind.RParen)
+                throw new FormatException("Application requires at least one argument.");
+
+            while (tokens.Count > 0 && tokens.Peek().Kind != TokenKind.RParen)
+                result = new App(result, Parse(tokens, env));
+
+            if (tokens.Count == 0)
                 throw new FormatException("Expected ')' to close application.");
-            tokens.Dequeue();
+            tokens.Dequeue(); // consume ')'
 
-            return new App(fun, arg);
+            return result;
         }
     }
 

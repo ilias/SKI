@@ -50,23 +50,25 @@ dotnet run -- "(((S K) K) I)"
 
 ## Expression Syntax
 
-All application is **strictly binary**. Every `(f x)` applies `f` to exactly one argument. Multi-argument application must be written with explicit left-nesting:
+A parenthesised form `(f a b c ...)` applies `f` to all arguments **left-associatively**:
 
-| Intent | Written as |
+| Written as | Equivalent to |
 |---|---|
-| `f a` | `(f a)` |
-| `f a b` | `((f a) b)` |
-| `f a b c` | `(((f a) b) c)` |
+| `(f a)` | `(f a)` |
+| `(f a b)` | `((f a) b)` |
+| `(f a b c)` | `(((f a) b) c)` |
+
+The old fully-explicit nesting `((f a) b)` still works identically — the two forms are interchangeable.
 
 **Atoms** are either a single uppercase letter (`S K I B C W Y`) or a user-defined name (`[A-Za-z][A-Za-z0-9_]*`).
 
 **Grammar:**
 
 ```
-line  = Name '=' expr       ;  definition
-      | expr                ;  reduction
+line  = Name '=' expr            ;  definition
+      | expr                     ;  reduction
 expr  = ATOM
-      | '(' expr expr ')'
+      | '(' expr expr+ ')'      ;  left-associative application
 ```
 
 Comments start with `#` and run to the end of the line.
