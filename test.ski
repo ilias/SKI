@@ -394,3 +394,115 @@
 
 # LENGTH (CONS S (CONS K (CONS I NIL))) = THREE
 ((((EQ (LENGTH ((CONS S) ((CONS K) ((CONS I) NIL))))) THREE) S) K)
+
+# ============================================================================
+# 13. LAMBDA ABSTRACTION  (\x y. body → SKI via bracket abstraction)
+# ============================================================================
+
+# \x. x  compiles to  I  (identity)
+\x. x
+
+# \x y. x  compiles to  K  (constant / first-projection)
+\x y. x
+
+# \x y. y  compiles to  K I  (second-projection = FALSE)
+\x y. y
+
+# \f x. (f x)  has a free tail: eta-reduces to  I
+\f x. (f x)
+
+# Church 2 written as lambda: \f x. (f (f x))  = (S B) I
+LAMBDA2 = \f x. (f (f x))
+((((EQ LAMBDA2) TWO) S) K)
+
+# Church 3 written as lambda: \f x. (f (f (f x)))
+LAMBDA3 = \f x. (f (f (f x)))
+((((EQ LAMBDA3) THREE) S) K)
+
+# Lambda NOT: \b. \x y. (b y x)  should equal NOT (= C)
+LNOT = \b x y. (b y x)
+(((LNOT TRUE) S) K)    # LNOT TRUE = FALSE → K
+(((LNOT FALSE) S) K)   # LNOT FALSE = TRUE → S
+
+# Lambda AND: \p q. (p q FALSE)
+LAND = \p q. (p q FALSE)
+((((LAND TRUE) TRUE) S) K)    # TRUE
+((((LAND TRUE) FALSE) S) K)   # FALSE
+((((LAND FALSE) TRUE) S) K)   # FALSE
+
+# Lambda K (const): \x y. x
+LK = \x y. x
+((((EQ LK) K) S) K)
+
+# ============================================================================
+# 14. PARAMETERIZED DEFINITIONS  (Name x y = body  is sugar for  Name = \x y. body)
+# ============================================================================
+
+# Identity: MYID x = x  →  I
+MYID x = x
+MYID
+
+# Constant: MYCONST x y = x  →  K
+MYCONST x y = x
+((MYCONST S) K)        # → S  (K selects first)
+
+# Composition: MYCOMPOSE f g x = (f (g x))  →  B
+MYCOMPOSE f g x = (f (g x))
+# MYCOMPOSE SUCC (ADD ONE) TWO = SUCC(ADD ONE TWO) = SUCC THREE = FOUR
+((((EQ (((MYCOMPOSE SUCC) (ADD ONE)) TWO)) FOUR) S) K)
+
+# Flip: MYFLIP f x y = (f y x)  →  C
+MYFLIP f x y = (f y x)
+(((MYFLIP K) S) I)     # MYFLIP K S I = K I S = I
+
+# Two-arg addition shorthand
+MYADD x y = (ADD x y)
+((((EQ ((MYADD TWO) THREE)) FIVE) S) K)
+
+# Recursive factorial via Y:  FACTF rec n = IF (ISZERO n) ONE (MUL n (rec (PRED n)))
+# Written using parameterized definition for the step function, wrapped with Y:
+FACTF rec n = (ISZERO n ONE ((MUL n) (rec (PRED n))))
+FACT = (Y FACTF)
+((((EQ (FACT ZERO)) ONE) S) K)   # 0! = 1
+((((EQ (FACT ONE))  ONE) S) K)   # 1! = 1
+((((EQ (FACT TWO))  TWO) S) K)   # 2! = 2
+((((EQ (FACT THREE)) SIX) S) K)  # 3! = 6
+((((EQ (FACT FOUR)) ((MUL SIX) FOUR)) S) K)  # 4! = 24 = MUL 6 4
+
+# ============================================================================
+# 15. INTEGER LITERALS  (n in source  →  Church numeral at parse time)
+# ============================================================================
+
+# Literal 0 = ZERO
+((((EQ 0) ZERO) S) K)
+
+# Literal 1 = ONE
+((((EQ 1) ONE) S) K)
+
+# Literal 2 = TWO
+((((EQ 2) TWO) S) K)
+
+# Literal 5 = FIVE
+((((EQ 5) FIVE) S) K)
+
+# Literals in arithmetic: ADD 2 3 = FIVE
+((((EQ ((ADD 2) 3)) FIVE) S) K)
+
+# Literals in comparisons: LEQ 3 5 = TRUE
+(((LEQ 3) 5) S)    # should reduce to S (TRUE applied to S K → S)
+(((LEQ 3) 5) K)    # → K for second arg
+
+# MUL 3 4 = 12
+((((EQ ((MUL 3) 4)) ((MUL THREE) FOUR)) S) K)
+
+# POW 2 4 = 16  (2^8=256 is too expensive for EQ; use smaller exponent)
+((((EQ ((POW 2) 4)) ((POW TWO) FOUR)) S) K)
+
+# Literal in parameterized def body: successor of 4 = 5
+((((EQ (SUCC 4)) 5) S) K)
+
+# Zero as Church numeral: ISZERO 0 = TRUE
+(((ISZERO 0) S) K)
+
+# Non-zero literal: ISZERO 1 = FALSE
+(((ISZERO 1) S) K)

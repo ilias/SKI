@@ -28,7 +28,11 @@ A complete combinator calculus interpreter written in C# (.NET 10). Supports the
   - [Encoding Conventions](#encoding-conventions)
     - [Reading boolean results](#reading-boolean-results)
     - [Reading numeral results](#reading-numeral-results)
+    - [Reading list results](#reading-list-results)
     - [Recursive definitions with Y](#recursive-definitions-with-y)
+  - [Lambda Abstraction](#lambda-abstraction)
+  - [Parameterized Definitions](#parameterized-definitions)
+  - [Integer Literals](#integer-literals)
   - [Limitations](#limitations)
 
 ---
@@ -61,15 +65,18 @@ A parenthesised form `(f a b c ...)` applies `f` to all arguments **left-associa
 
 The old fully-explicit nesting `((f a) b)` still works identically — the two forms are interchangeable.
 
-**Atoms** are either a single uppercase letter (`S K I B C W Y`) or a user-defined name (`[A-Za-z][A-Za-z0-9_]*`).
+**Atoms** are either a single uppercase letter (`S K I B C W Y`), a user-defined name (`[A-Za-z][A-Za-z0-9_]*`), or a non-negative **integer literal** (`0`, `42`, …).
 
 **Grammar:**
 
 ```
-line  = Name '=' expr            ;  definition
+line  = Name params '=' expr     ;  definition (params may be empty)
       | expr                     ;  reduction
 expr  = ATOM
+      | integer                  ;  Church numeral literal
+      | '\' ident+ '.' expr     ;  lambda abstraction
       | '(' expr expr+ ')'      ;  left-associative application
+params = ident*
 ```
 
 Comments start with `#` and run to the end of the line.
@@ -108,17 +115,21 @@ Built-in names (`S K I B C W Y`) cannot be redefined by user code.
 |---|---|
 | `(expr)` | Evaluate and print the reduced form |
 | `Name = expr` | Define `Name` and add it to the environment |
+| `Name x y = expr` | Parameterized definition — sugar for `Name = \x y. expr` |
 | `:load <file.ski>` | Load definitions (and any bare expressions) from a file |
 | `:save <file.ski>` | Write all current definitions to a `.ski` file |
 | `:env` | List all defined names alphabetically with their bodies |
 | `:env <pattern>` | List definitions whose name contains `pattern` (case-insensitive) |
+| `:def <Name>` | Show the stored body of a single definition |
 | `:undef <Name>` | Remove a definition from the environment |
 | `:expand <expr>` | Show the fully-expanded SKI tree (all names substituted) without reducing |
 | `:nat <expr>` | Reduce `expr` and decode the result as a Church numeral integer |
 | `:bool <expr>` | Reduce `expr` and decode the result as a Church boolean (`TRUE`/`FALSE`) |
+| `:list <expr>` | Reduce `expr` and decode the result as a Church-encoded list |
 | `:bench <expr>` | Reduce `expr` and report the step count and wall-clock time |
 | `:trace` | Toggle step-by-step reduction output (prints each intermediate expression) |
 | `:reset` | Clear all user-defined names and reload `init.ski` |
+| `:reload` | Re-read `init.ski` into the current environment without clearing user definitions |
 | `:help` / `:?` | Print the command reference |
 | `exit` | Quit the REPL |
 
@@ -141,6 +152,19 @@ Built-in names (`S K I B C W Y`) cannot be redefined by user code.
 > :nat ((ADD TWO) THREE)
   Result : ...
   Nat    : 5
+> :nat ((ADD 2) 3)
+  Result : ...
+  Nat    : 5
+> DOUBLE n = (MUL 2 n)
+  Defined DOUBLE n = (MUL 2 n)  →  (B (MUL TWO) I)
+> :nat (DOUBLE 4)
+  Result : ...
+  Nat    : 8
+> :list ((CONS S) ((CONS K) NIL))
+  Result : ...
+  List   : [S, K]  (length 2)
+> :def ADD
+  ADD = ((B S) (B B))
 > :bench ((POW TWO) TEN)
   Result : ...
   Steps  : 24  (0 ms)
@@ -167,13 +191,20 @@ Built-in names (`S K I B C W Y`) cannot be redefined by user code.
 
 ## Name Definitions
 
-A definition has the form:
+A simple definition:
 
 ```
 Name = expr
 ```
 
+A **parameterized** definition (see [Parameterized Definitions](#parameterized-definitions)):
+
+```
+Name x y = expr
+```
+
 - `Name` must match `[A-Za-z][A-Za-z0-9_]*` and must not be a built-in combinator.
+- Parameter names are also identifiers and must not be built-ins.
 - The body `expr` may reference any previously defined name.
 - Names are **resolved lazily** during reduction — the stored body is substituted on demand as the reducer encounters a `NameRef` node. There is no upfront tree-expansion.
 - **Self-reference warning**: if the body directly mentions its own name (e.g. `FOO = FOO`), a warning is printed at define-time. Use `Y` for recursion instead.
@@ -430,6 +461,21 @@ To compare two numerals inside a `.ski` expression, use `EQ`:
 
 Alternatively, apply `n` to `SUCC` and `ZERO` — the result reduces to the equivalent literal numeral (`I` for ONE, `((S B) I)` for TWO, etc.).
 
+### Reading list results
+
+The `:list` command reduces an expression and decodes it as a Church-encoded list, printing each element:
+
+```
+> :list ((CONS S) ((CONS K) NIL))
+  Result : ...
+  List   : [S, K]  (length 2)
+> :list NIL
+  Result : ...
+  List   : []  (length 0)
+```
+
+`:list` requires `ISNIL`, `HEAD`, and `TAIL` to be defined (they are in `init.ski`).
+
 ### Recursive definitions with Y
 
 To define a recursive function, write a "step" combinator that takes a self-reference as its first argument, then wrap it with `Y`:
@@ -446,9 +492,130 @@ Because `Y` is lazy, `(Y DOUBLEF)` does not unfold until applied to an argument.
 
 ---
 
+## Lambda Abstraction
+
+Lambda expressions are written with a backslash, parameter names, and a dot:
+
+```
+\x. body
+\x y z. body
+```
+
+The interpreter compiles them to pure SKI combinators at parse time using **Turner-optimized bracket abstraction**. The rules applied (in priority order) are:
+
+| Pattern | Rule | Note |
+|---|---|---|
+| `[x] x` | `I` | eta/identity |
+| `[x] e` (x not free in e) | `K e` | constant |
+| `[x] (f x)` (x not free in f) | `f` | eta-reduction |
+| `[x] (f a)` (x not free in f) | `B f ([x] a)` | B-optimisation |
+| `[x] (f a)` (x not free in a) | `C ([x] f) a` | C-optimisation |
+| `[x] (f a)` | `S ([x] f) ([x] a)` | general case |
+
+Multiple parameters abstract right-to-left: `\x y. body` = `[x]([y] body)`.
+
+**Examples:**
+
+```
+> \x. x
+  Result : I
+
+> \x y. x
+  Result : K
+
+> \x y. y
+  Result : (K I)
+
+> \f x. (f (f x))
+  Result : ((S B) I)   # Church numeral 2
+
+> \f g x. (f (g x))
+  Result : B           # composition
+```
+
+Lambda expressions can appear anywhere an expression is expected — inside definitions, in the REPL, and in `.ski` files:
+
+```
+> MYPRED = \n. (PRED n)
+> MYFLIP f x y = (f y x)   # equivalent parameterized form
+```
+
+---
+
+## Parameterized Definitions
+
+A definition may include parameter names on the left-hand side:
+
+```
+Name p1 p2 ... pN = body
+```
+
+This is exactly equivalent to:
+
+```
+Name = \p1 p2 ... pN. body
+```
+
+Bracket abstraction is applied automatically. The REPL shows both the lambda form and the compiled combinator:
+
+```
+> DOUBLE n = (MUL 2 n)
+  Defined DOUBLE n = (MUL 2 n)  →  (B (MUL TWO) I)
+
+> COMPOSE f g x = (f (g x))
+  Defined COMPOSE f g x = (f (g x))  →  B
+
+> FLIP f x y = (f y x)
+  Defined FLIP f x y = (f y x)  →  C
+```
+
+Parameterized definitions work identically in `.ski` files.
+
+**Recursive functions** combine parameterized defs with `Y`:
+
+```
+# Step function: FACTF rec n = IF (ISZERO n) 1 (MUL n (rec (PRED n)))
+FACTF rec n = (ISZERO n 1 ((MUL n) (rec (PRED n))))
+FACT = (Y FACTF)
+```
+
+---
+
+## Integer Literals
+
+Any non-negative integer written directly in an expression is converted to the corresponding **Church numeral** at parse time:
+
+```
+> :nat 5
+  Nat    : 5
+
+> :nat ((ADD 2) 3)
+  Nat    : 5
+
+> :bool (ISZERO 0)
+  Bool   : TRUE
+
+> :nat ((MUL 3) 4)
+  Nat    : 12
+```
+
+Integer literals may appear anywhere a name or sub-expression may appear:
+
+```
+DOUBLE n = (MUL 2 n)
+ADD5    = (ADD 5)
+```
+
+The mapping is:
+- `0` → `(K I)` (ZERO)
+- `1` → `I` (ONE)
+- `n ≥ 2` → `(S B (S B (... I)))` — `n-1` applications of `(S B)` to `I`
+
+---
+
 ## Limitations
 
-- **No integers**: only Church numerals. Arithmetic on large numerals is exponentially expensive.
+- **Church numerals only**: integer literals are syntactic sugar — they compile to Church numerals at parse time. Arithmetic on large numerals is exponentially expensive in reduction steps.
 - **Step limit**: reduction halts after 1,000,000 steps; complex recursive computations on large numerals may hit this ceiling.
 - **No I/O**: the interpreter is purely functional — expressions may only be evaluated, not executed for effects.
 - **No type system**: all terms are untyped; ill-formed expressions reduce to irreducible terms rather than raising type errors.

@@ -14,6 +14,9 @@
 //   W x y     →  x y y            (duplication)
 //   Y f (lazy)→  f (Y f) applied to next argument
 //
+// Lambda abstraction: \x y. body  — compiled to SKI via bracket abstraction
+// Integer literals:   0, 1, 42    — converted to Church numerals at parse time
+// Parameterized defs: F x y = body — sugar for  F = \x y. body
 // Run with: dotnet run -- "(((S K) K) I)"
 // Or interactively with no arguments.
 
@@ -164,6 +167,51 @@ else
             continue;
         }
 
+        // :list <expr>  — reduce and decode as Church list
+        if (trimmed.StartsWith(":list", StringComparison.OrdinalIgnoreCase))
+        {
+            var rest = trimmed[5..].Trim();
+            if (rest.Length == 0)
+                Cwl("  Usage: :list <expr>", ConsoleColor.DarkGray);
+            else
+                ListLine(rest, env);
+            continue;
+        }
+
+        // :def <name>  — show the definition of a single name
+        if (trimmed.StartsWith(":def", StringComparison.OrdinalIgnoreCase))
+        {
+            var name = trimmed[4..].Trim();
+            if (name.Length == 0)
+                Cwl("  Usage: :def <name>", ConsoleColor.DarkGray);
+            else if (Combinators.IsBuiltin(name))
+                Cwl($"  {name} is a built-in combinator", ConsoleColor.Cyan);
+            else if (env.TryGetValue(name, out var defExpr))
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.Write($"  {name}");
+                Console.ResetColor();
+                Console.WriteLine($" = {defExpr}");
+            }
+            else
+                Cwl($"  '{name}' is not defined", ConsoleColor.DarkYellow);
+            continue;
+        }
+
+        // :reload  — re-read init.ski into the current environment (without clearing)
+        if (trimmed.Equals(":reload", StringComparison.OrdinalIgnoreCase))
+        {
+            if (initPath is null)
+                Cwl("  No init.ski found to reload", ConsoleColor.DarkYellow);
+            else
+            {
+                int before = env.Count;
+                LoadFile(initPath, env, silent: true);
+                Cwl($"  Reloaded {initPath} ({env.Count - before} new, {env.Count} total)", ConsoleColor.DarkCyan);
+            }
+            continue;
+        }
+
         // :save <file>  — write all current definitions to a .ski file
         if (trimmed.StartsWith(":save", StringComparison.OrdinalIgnoreCase))
         {
@@ -191,21 +239,27 @@ static void PrintHelp(string? initPath)
 {
     Console.WriteLine("SKI(BCWY) Combinator Interpreter");
     Console.WriteLine("Syntax : (f a b c) = left-assoc application  |  (f a) = binary");
+    Console.WriteLine("Lambda : \\x y. body  compiled to SKI via bracket abstraction");
+    Console.WriteLine("Nums   : 0  42  etc.  converted to Church numerals at parse time");
     Console.WriteLine("Atoms  : S  K  I  B  C  W  Y  <Name>");
-    Console.WriteLine("Define : Name = expr");
+    Console.WriteLine("Define : Name = expr            simple definition");
+    Console.WriteLine("         Name x y = expr        parameterized  (= Name = \\x y. expr)");
     Console.WriteLine("Rules  : I x=x  K x y=x  S x y z=(xz)(yz)");
     Console.WriteLine("         B x y z=x(yz)  C x y z=xzy  W x y=xyy  Y f=f(Yf)");
     Console.WriteLine("Commands:");
     Console.WriteLine("  :load <file>    load definitions/expressions from a .ski file");
     Console.WriteLine("  :save <file>    save all current definitions to a .ski file");
     Console.WriteLine("  :env [pat]      list defined names (optionally filtered)");
+    Console.WriteLine("  :def <name>     show definition of a single name");
     Console.WriteLine("  :undef <name>   remove a definition from the environment");
     Console.WriteLine("  :expand <expr>  show fully-expanded SKI tree (no reduction)");
     Console.WriteLine("  :nat <expr>     reduce and decode result as a Church numeral");
     Console.WriteLine("  :bool <expr>    reduce and decode result as a Church boolean");
+    Console.WriteLine("  :list <expr>    reduce and decode result as a Church list");
     Console.WriteLine("  :bench <expr>   reduce and report the number of steps taken");
     Console.WriteLine("  :trace          toggle step-by-step reduction trace");
     Console.WriteLine("  :reset          clear user definitions and reload init.ski");
+    Console.WriteLine("  :reload         re-read init.ski into current environment");
     Console.WriteLine("  :help           show this message");
     Console.WriteLine("  Tip: end a line with \\ to continue on the next line");
     Console.WriteLine("  exit            quit");
@@ -218,25 +272,36 @@ static void RunLine(string input, Dictionary<string, Expr> env, bool trace)
 {
     try
     {
-        // Detect   Name = expr   — left side must be a plain identifier, not a builtin.
+        // Detect   Name = expr   or   Name x y = expr   (parameterized definition).
         var eqIdx = input.IndexOf('=');
         if (eqIdx > 0)
         {
-            var namePart = input[..eqIdx].Trim();
-            if (IsIdent(namePart))
+            var lhsParts = input[..eqIdx].Trim()
+                .Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (lhsParts.Length > 0 && lhsParts.All(IsIdent))
             {
-                if (Combinators.IsBuiltin(namePart))
-                    throw new InvalidOperationException($"Cannot redefine built-in combinator '{namePart}'.");
-                var bodyPart = input[(eqIdx + 1)..].Trim();
+                var name  = lhsParts[0];
+                var parms = lhsParts[1..];
+                if (Combinators.IsBuiltin(name))
+                    throw new InvalidOperationException($"Cannot redefine built-in combinator '{name}'.");
+                foreach (var p in parms)
+                    if (Combinators.IsBuiltin(p))
+                        throw new FormatException($"Cannot use built-in '{p}' as a parameter name.");
+                var bodyPart   = input[(eqIdx + 1)..].Trim();
                 var bodyTokens = Lexer.Tokenize(bodyPart);
-                var body = Parser.Parse(bodyTokens, env);
+                var body       = Parser.Parse(bodyTokens, env);
                 if (bodyTokens.Count > 0)
                     throw new FormatException("Unexpected tokens after definition body.");
-                // Warn if the name directly references itself in its own body.
-                if (Expander.ContainsName(body, namePart))
-                    Cwl($"  Warning: '{namePart}' references itself — use Y for recursion", ConsoleColor.Yellow);
-                env[namePart] = body;
-                Cwl($"  Defined {namePart} = {body}", ConsoleColor.DarkGreen);
+                var fullBody = parms.Length > 0
+                    ? BracketAbstract.AbstractAll(parms, body)
+                    : body;
+                if (parms.Length == 0 && Expander.ContainsName(body, name))
+                    Cwl($"  Warning: '{name}' references itself — use Y for recursion", ConsoleColor.Yellow);
+                env[name] = fullBody;
+                if (parms.Length > 0)
+                    Cwl($"  Defined {name} {string.Join(" ", parms)} = {body}  →  {fullBody}", ConsoleColor.DarkGreen);
+                else
+                    Cwl($"  Defined {name} = {fullBody}", ConsoleColor.DarkGreen);
                 return;
             }
         }
@@ -319,6 +384,30 @@ static void BoolLine(string input, Dictionary<string, Expr> env)
     }
 }
 
+static void ListLine(string input, Dictionary<string, Expr> env)
+{
+    try
+    {
+        var tokens = Lexer.Tokenize(input);
+        var expr   = Parser.Parse(tokens, env);
+        if (tokens.Count > 0)
+            throw new FormatException("Unexpected tokens after expression.");
+        var result = Reducer.Reduce(expr, env, null);
+        Cwl($"  Result : {result}", ConsoleColor.DarkGray);
+        var items = ChurchList.Decode(result, env);
+        if (items is not null)
+            Cwl($"  List   : [{string.Join(", ", items)}]  (length {items.Count})",
+                ConsoleColor.Green);
+        else
+            Cwl("  List   : (not a Church list, or ISNIL/HEAD/TAIL not defined)",
+                ConsoleColor.DarkYellow);
+    }
+    catch (Exception ex)
+    {
+        Cwl($"  Error  : {ex.Message}", ConsoleColor.Red);
+    }
+}
+
 static void BenchLine(string input, Dictionary<string, Expr> env)
 {
     try
@@ -383,22 +472,31 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent)
         if (line.Length == 0) continue;
         try
         {
-            // Only definitions are expected in library files.
+            // Definitions: Name = expr  or  Name x y = expr  (parameterized).
             var eqIdx = line.IndexOf('=');
             if (eqIdx > 0)
             {
-                var namePart = line[..eqIdx].Trim();
-                if (IsIdent(namePart))
+                var lhsParts = line[..eqIdx].Trim()
+                    .Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (lhsParts.Length > 0 && lhsParts.All(IsIdent))
                 {
-                    if (Combinators.IsBuiltin(namePart))
-                        throw new InvalidOperationException($"Cannot redefine built-in combinator '{namePart}'.");
-                    var bodyPart = line[(eqIdx + 1)..].Trim();
+                    var name  = lhsParts[0];
+                    var parms = lhsParts[1..];
+                    if (Combinators.IsBuiltin(name))
+                        throw new InvalidOperationException($"Cannot redefine built-in combinator '{name}'.");
+                    foreach (var p in parms)
+                        if (Combinators.IsBuiltin(p))
+                            throw new FormatException($"Cannot use built-in '{p}' as a parameter name.");
+                    var bodyPart   = line[(eqIdx + 1)..].Trim();
                     var bodyTokens = Lexer.Tokenize(bodyPart);
-                    var body = Parser.Parse(bodyTokens, env);
+                    var body       = Parser.Parse(bodyTokens, env);
                     if (bodyTokens.Count > 0)
                         throw new FormatException("Unexpected tokens after definition body.");
-                    env[namePart] = body;
-                    if (!silent) Cwl($"  Defined {namePart} = {body}", ConsoleColor.DarkGreen);
+                    var fullBody = parms.Length > 0
+                        ? BracketAbstract.AbstractAll(parms, body)
+                        : body;
+                    env[name] = fullBody;
+                    if (!silent) Cwl($"  Defined {name} = {fullBody}", ConsoleColor.DarkGreen);
                     defined++;
                     continue;
                 }
@@ -498,7 +596,7 @@ namespace SKI
 
     // ── Tokens ────────────────────────────────────────────────────────────────
 
-    enum TokenKind { LParen, RParen, Ident }
+    enum TokenKind { LParen, RParen, Ident, Lambda, Dot, Number }
     record Token(TokenKind Kind, string Value, int Position);
 
     // ── Lexer ─────────────────────────────────────────────────────────────────
@@ -515,6 +613,15 @@ namespace SKI
                 if (char.IsWhiteSpace(ch)) { i++; continue; }
                 if (ch == '(') { q.Enqueue(new Token(TokenKind.LParen, "(", i++)); continue; }
                 if (ch == ')') { q.Enqueue(new Token(TokenKind.RParen, ")", i++)); continue; }
+                if (ch == '\\') { q.Enqueue(new Token(TokenKind.Lambda, "\\", i++)); continue; }
+                if (ch == '.')  { q.Enqueue(new Token(TokenKind.Dot,    ".",  i++)); continue; }
+                if (char.IsDigit(ch))
+                {
+                    int start = i;
+                    while (i < source.Length && char.IsDigit(source[i])) i++;
+                    q.Enqueue(new Token(TokenKind.Number, source[start..i], start));
+                    continue;
+                }
                 if (char.IsLetter(ch) || ch == '_')
                 {
                     int start = i;
@@ -546,8 +653,9 @@ namespace SKI
                                         ? Combinators.FromName(tok.Value)
                                         : (Expr)new NameRef(tok.Value),
                 TokenKind.LParen  => ParseApp(tokens, env, tok.Position),
-                TokenKind.RParen  => throw new FormatException($"Unexpected ')' at column {tok.Position + 1}.")
-                ,
+                TokenKind.RParen  => throw new FormatException($"Unexpected ')' at column {tok.Position + 1}."),
+                TokenKind.Lambda  => ParseLambda(tokens, env),
+                TokenKind.Number  => BuildChurchNumeral(int.Parse(tok.Value)),
                 _ => throw new FormatException($"Unexpected token '{tok.Value}' at column {tok.Position + 1}.")
             };
         }
@@ -568,6 +676,37 @@ namespace SKI
                 throw new FormatException($"Expected ')' to close '(' at column {openParenPos + 1}.");
             tokens.Dequeue(); // consume ')'
 
+            return result;
+        }
+
+        private static Expr ParseLambda(Queue<Token> tokens, Dictionary<string, Expr> env)
+        {
+            // Collect parameter names until a Dot token.
+            var parms = new List<string>();
+            while (tokens.Count > 0 && tokens.Peek().Kind == TokenKind.Ident)
+            {
+                var p = tokens.Dequeue();
+                if (Combinators.IsBuiltin(p.Value))
+                    throw new FormatException($"Cannot use built-in '{p.Value}' as a lambda parameter.");
+                parms.Add(p.Value);
+            }
+            if (parms.Count == 0)
+                throw new FormatException("Lambda requires at least one parameter name before '.'.");
+            if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.Dot)
+                throw new FormatException("Expected '.' after lambda parameters.");
+            tokens.Dequeue(); // consume '.'
+            var body = Parse(tokens, env);
+            return BracketAbstract.AbstractAll(parms, body);
+        }
+
+        // ZERO = K I,  ONE = I,  n = S B (n-1) for n >= 2.
+        // Satisfies: n f x = f^n x  (Church numeral encoding).
+        private static Expr BuildChurchNumeral(int n)
+        {
+            if (n == 0) return new App(Combinators.K, Combinators.I);
+            Expr result = Combinators.I;
+            for (int i = 2; i <= n; i++)
+                result = new App(new App(Combinators.S, Combinators.B), result);
             return result;
         }
     }
@@ -608,6 +747,63 @@ namespace SKI
             App(var f, var x) => ContainsName(f, name) || ContainsName(x, name),
             _               => false
         };
+    }
+
+    // ── Bracket abstraction ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Turner-optimized bracket abstraction: compiles lambda expressions to SKI combinators.
+    /// Uses B and C to avoid redundant K-wrapping, and eta-reduces (f x) → f when x ∉ fv(f).
+    /// </summary>
+    static class BracketAbstract
+    {
+        public static bool IsFree(string x, Expr expr) => expr switch
+        {
+            NameRef(var n)    => StringComparer.Ordinal.Equals(n, x),
+            App(var f, var a) => IsFree(x, f) || IsFree(x, a),
+            _                 => false  // Combinator — never contains free variables
+        };
+
+        /// <summary>Compiles [x] body into a combinator expression without x.</summary>
+        public static Expr Abstract(string x, Expr body)
+        {
+            // [x] x  →  I
+            if (body is NameRef(var n) && StringComparer.Ordinal.Equals(n, x))
+                return Combinators.I;
+
+            // x not free  →  K body
+            if (!IsFree(x, body))
+                return new App(Combinators.K, body);
+
+            if (body is App(var f, var a))
+            {
+                // Eta: [x] (f x)  →  f   when x ∉ fv(f)
+                if (a is NameRef(var an) && StringComparer.Ordinal.Equals(an, x) && !IsFree(x, f))
+                    return f;
+
+                // B: [x] (f a)  →  B f ([x] a)   when x ∉ fv(f)
+                if (!IsFree(x, f))
+                    return new App(new App(Combinators.B, f), Abstract(x, a));
+
+                // C: [x] (f a)  →  C ([x] f) a   when x ∉ fv(a)
+                if (!IsFree(x, a))
+                    return new App(new App(Combinators.C, Abstract(x, f)), a);
+
+                // S: [x] (f a)  →  S ([x] f) ([x] a)
+                return new App(new App(Combinators.S, Abstract(x, f)), Abstract(x, a));
+            }
+
+            return new App(Combinators.K, body); // unreachable
+        }
+
+        /// <summary>Abstracts multiple params left-to-right: \p0 p1 p2. body = [p0]([p1]([p2] body)).</summary>
+        public static Expr AbstractAll(IReadOnlyList<string> parms, Expr body)
+        {
+            var result = body;
+            for (int i = parms.Count - 1; i >= 0; i--)
+                result = Abstract(parms[i], result);
+            return result;
+        }
     }
 
     // ── Reducer ───────────────────────────────────────────────────────────────
@@ -846,6 +1042,43 @@ namespace SKI
                 return null;
             }
             catch { return null; }
+        }
+    }
+
+    // ── Church-list decoder ───────────────────────────────────────────────────
+
+    static class ChurchList
+    {
+        private const int MaxLen = 256;
+
+        /// <summary>
+        /// Decodes a Church-encoded list by applying ISNIL / HEAD / TAIL from <paramref name="env"/>.
+        /// Returns null if the result is not a Church list or the required names are undefined.
+        /// </summary>
+        public static List<Expr>? Decode(Expr result, Dictionary<string, Expr> env)
+        {
+            if (!env.TryGetValue("ISNIL", out var isNilDef) ||
+                !env.TryGetValue("HEAD",  out var headDef)  ||
+                !env.TryGetValue("TAIL",  out var tailDef))
+                return null;
+
+            var items = new List<Expr>();
+            var current = result;
+            for (int i = 0; i <= MaxLen; i++)
+            {
+                try
+                {
+                    var isNilResult = Reducer.Reduce(new App(isNilDef, current), env, null);
+                    var isNil = ChurchBool.Decode(isNilResult, env);
+                    if (isNil is true)  return items;
+                    if (isNil is not false) return null;
+                    if (i == MaxLen) return null;  // too long
+                    items.Add(Reducer.Reduce(new App(headDef, current), env, null));
+                    current = Reducer.Reduce(new App(tailDef, current), env, null);
+                }
+                catch { return null; }
+            }
+            return null;
         }
     }
 
