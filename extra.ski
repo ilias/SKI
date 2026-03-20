@@ -1,3 +1,0 @@
-# extra.ski - demo of :load
-CONST_ZERO = (K ZERO)
-PRED_ZERO  = ((C ((B MUL) SUCC)) ZERO)

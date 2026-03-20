@@ -1,8 +1,0 @@
-# Direct FALSE test
-(((FALSE S) K))
-# ISNIL direct
-(ISNIL NIL)
-ISCN = (ISNIL (CONS S NIL))
-ISCN
-((ISCN S) K)
-(((ISCN S) K))
