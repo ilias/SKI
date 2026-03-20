@@ -98,7 +98,7 @@ Built-in names (`S K I B C W Y`) cannot be redefined by user code.
 
 - **Outermost-leftmost** (normal-order) reduction — guarantees finding a normal form whenever one exists.
 - Fully **iterative**: an internal zipper stack replaces recursion, so there is no risk of stack overflow on deeply nested expressions.
-- Reduction stops after **10,000 steps**; expressions that exceed this limit are returned as-is with a step-limit message.
+- Reduction stops after **1,000,000 steps**; expressions that exceed this limit raise a step-limit error.
 
 ---
 
@@ -111,6 +111,11 @@ Built-in names (`S K I B C W Y`) cannot be redefined by user code.
 | `:load <file.ski>` | Load definitions (and any bare expressions) from a file |
 | `:env` | List all defined names alphabetically with their bodies |
 | `:env <pattern>` | List definitions whose name contains `pattern` (case-insensitive) |
+| `:expand <expr>` | Show the fully-expanded SKI tree (all names substituted) without reducing |
+| `:nat <expr>` | Reduce `expr` and decode the result as a Church numeral integer |
+| `:trace` | Toggle step-by-step reduction output (prints each intermediate expression) |
+| `:reset` | Clear all user-defined names and reload `init.ski` |
+| `:help` / `:?` | Print the command reference |
 | `exit` | Quit the REPL |
 
 **Example session:**
@@ -123,6 +128,19 @@ Built-in names (`S K I B C W Y`) cannot be redefined by user code.
 > (((TRUE S) K) I)
   Parsed : (((TRUE S) K) I)
   Result : S
+> :nat ((ADD TWO) THREE)
+  Result : ((S ((B B) ((S B) I))) ((S B) ((S B) I)))
+  Nat    : 5
+> :expand NOT
+  Expanded: C
+> :trace
+  Trace : ON
+> ((K S) K)
+  Parsed : ((K S) K)
+  [     1] S
+  Result : S
+> :trace
+  Trace : OFF
 > :env bool
   AND    = ((S S) (K FALSE))
   FALSE  = (K I)
@@ -141,9 +159,10 @@ Name = expr
 ```
 
 - `Name` must match `[A-Za-z][A-Za-z0-9_]*` and must not be a built-in combinator.
-- The body `expr` may reference any previously defined name (or even the name being defined, enabling mutual recursion via `Y`).
-- Names are **expanded lazily** at reduction time — the stored body is substituted just before reduction.
-- **Cycle detection**: defining `A = A` (direct or indirect) is detected and raises an error at expansion time.
+- The body `expr` may reference any previously defined name.
+- Names are **resolved lazily** during reduction — the stored body is substituted on demand as the reducer encounters a `NameRef` node. There is no upfront tree-expansion.
+- **Self-reference warning**: if the body directly mentions its own name (e.g. `FOO = FOO`), a warning is printed at define-time. Use `Y` for recursion instead.
+- **Cycle detection for `:expand`**: the `:expand` command performs a full eager substitution and will report an error if a cyclic chain of definitions is encountered.
 
 ---
 
@@ -365,7 +384,18 @@ Since `TRUE = K` and `FALSE = (K I)`, you can "decode" a boolean `b` by applying
 
 ### Reading numeral results
 
-Church numeral `n` is opaque as a combinator expression. Use `EQ` to compare:
+The easiest way is the `:nat` REPL command — it reduces the expression and decodes it as an integer automatically:
+
+```
+> :nat ((ADD THREE) FOUR)
+  Result : ...
+  Nat    : 7
+> :nat ((POW TWO) TEN)
+  Result : ...
+  Nat    : 1024
+```
+
+To compare two numerals inside a `.ski` expression, use `EQ`:
 
 ```
 ((((EQ n m) S) K) I)   ;  → S  means n = m

@@ -20,6 +20,7 @@
 using SKI;
 
 var env = new Dictionary<string, Expr>(StringComparer.Ordinal);
+bool traceMode = false;
 
 // Auto-load init.ski from the same directory as the executable (or cwd).
 var initPath = FindInitFile();
@@ -28,21 +29,11 @@ if (initPath is not null)
 
 if (args.Length > 0)
 {
-    RunLine(string.Concat(args), env);
+    RunLine(string.Concat(args), env, traceMode);
 }
 else
 {
-    Console.WriteLine("SKI(BCWY) Combinator Interpreter");
-    Console.WriteLine("Syntax : (f a b c) = left-assoc application  |  (f a) = binary");
-    Console.WriteLine("Atoms  : S  K  I  B  C  W  Y  <Name>");
-    Console.WriteLine("Define : Name = expr");
-    Console.WriteLine("Load   : :load <file.ski>");
-    Console.WriteLine("Env    : :env [pattern]  — list defined names");
-    Console.WriteLine("Rules  : I x=x  K x y=x  S x y z=(xz)(yz)");
-    Console.WriteLine("         B x y z=x(yz)  C x y z=xzy  W x y=xyy  Y f=f(Yf)");
-    if (initPath is not null)
-        Console.WriteLine($"Loaded : {initPath}");
-    Console.WriteLine("Type 'exit' to quit.\n");
+    PrintHelp(initPath);
     while (true)
     {
         Console.Write("> ");
@@ -72,11 +63,87 @@ else
             continue;
         }
 
-        RunLine(trimmed, env);
+        // :reset  — clear user env and reload init.ski
+        if (trimmed.Equals(":reset", StringComparison.OrdinalIgnoreCase))
+        {
+            env.Clear();
+            if (initPath is not null)
+            {
+                LoadFile(initPath, env, silent: true);
+                Console.WriteLine($"  Reset — reloaded {initPath} ({env.Count} definition(s))");
+            }
+            else
+            {
+                Console.WriteLine("  Reset — environment cleared");
+            }
+            continue;
+        }
+
+        // :trace  — toggle step-by-step trace output
+        if (trimmed.Equals(":trace", StringComparison.OrdinalIgnoreCase))
+        {
+            traceMode = !traceMode;
+            Console.WriteLine($"  Trace : {(traceMode ? "ON" : "OFF")}");
+            continue;
+        }
+
+        // :expand <expr>  — show fully expanded SKI tree without reducing
+        if (trimmed.StartsWith(":expand", StringComparison.OrdinalIgnoreCase))
+        {
+            var rest = trimmed[7..].Trim();
+            if (rest.Length == 0)
+                Console.WriteLine("  Usage: :expand <expr>");
+            else
+                ExpandLine(rest, env);
+            continue;
+        }
+
+        // :nat <expr>  — reduce and decode as Church numeral
+        if (trimmed.StartsWith(":nat", StringComparison.OrdinalIgnoreCase))
+        {
+            var rest = trimmed[4..].Trim();
+            if (rest.Length == 0)
+                Console.WriteLine("  Usage: :nat <expr>");
+            else
+                NatLine(rest, env);
+            continue;
+        }
+
+        // :help
+        if (trimmed.Equals(":help", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals(":?", StringComparison.OrdinalIgnoreCase))
+        {
+            PrintHelp(initPath);
+            continue;
+        }
+
+        RunLine(trimmed, env, traceMode);
     }
 }
 
-static void RunLine(string input, Dictionary<string, Expr> env)
+static void PrintHelp(string? initPath)
+{
+    Console.WriteLine("SKI(BCWY) Combinator Interpreter");
+    Console.WriteLine("Syntax : (f a b c) = left-assoc application  |  (f a) = binary");
+    Console.WriteLine("Atoms  : S  K  I  B  C  W  Y  <Name>");
+    Console.WriteLine("Define : Name = expr");
+    Console.WriteLine("Rules  : I x=x  K x y=x  S x y z=(xz)(yz)");
+    Console.WriteLine("         B x y z=x(yz)  C x y z=xzy  W x y=xyy  Y f=f(Yf)");
+    Console.WriteLine("Commands:");
+    Console.WriteLine("  :load <file>    load definitions/expressions from a .ski file");
+    Console.WriteLine("  :env [pat]      list defined names (optionally filtered)");
+    Console.WriteLine("  :expand <expr>  show fully-expanded SKI tree (no reduction)");
+    Console.WriteLine("  :nat <expr>     reduce and decode result as a Church numeral");
+    Console.WriteLine("  :trace          toggle step-by-step reduction trace");
+    Console.WriteLine("  :reset          clear user definitions and reload init.ski");
+    Console.WriteLine("  :help           show this message");
+    Console.WriteLine("  exit            quit");
+    if (initPath is not null)
+        Console.WriteLine($"Loaded : {initPath}");
+    Console.WriteLine();
+}
+
+static void RunLine(string input, Dictionary<string, Expr> env, bool trace)
 {
     try
     {
@@ -94,6 +161,9 @@ static void RunLine(string input, Dictionary<string, Expr> env)
                 var body = Parser.Parse(bodyTokens, env);
                 if (bodyTokens.Count > 0)
                     throw new FormatException("Unexpected tokens after definition body.");
+                // Warn if the name directly references itself in its own body.
+                if (Expander.ContainsName(body, namePart))
+                    Console.WriteLine($"  Warning: '{namePart}' references itself — use Y for recursion");
                 env[namePart] = body;
                 Console.WriteLine($"  Defined {namePart} = {body}");
                 return;
@@ -106,9 +176,47 @@ static void RunLine(string input, Dictionary<string, Expr> env)
         if (tokens.Count > 0)
             throw new FormatException("Unexpected tokens after expression.");
         Console.WriteLine($"  Parsed : {expr}");
-        var expanded = Expander.Expand(expr, env);
-        var result = Reducer.Reduce(expanded);
+        var result = Reducer.Reduce(expr, env, trace ? Console.Out : null);
         Console.WriteLine($"  Result : {result}");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  Error  : {ex.Message}");
+    }
+}
+
+static void ExpandLine(string input, Dictionary<string, Expr> env)
+{
+    try
+    {
+        var tokens = Lexer.Tokenize(input);
+        var expr = Parser.Parse(tokens, env);
+        if (tokens.Count > 0)
+            throw new FormatException("Unexpected tokens after expression.");
+        var expanded = Expander.Expand(expr, env);
+        Console.WriteLine($"  Expanded: {expanded}");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  Error  : {ex.Message}");
+    }
+}
+
+static void NatLine(string input, Dictionary<string, Expr> env)
+{
+    try
+    {
+        var tokens = Lexer.Tokenize(input);
+        var expr = Parser.Parse(tokens, env);
+        if (tokens.Count > 0)
+            throw new FormatException("Unexpected tokens after expression.");
+        var result = Reducer.Reduce(expr, env, null);
+        Console.WriteLine($"  Result : {result}");
+        var n = ChurchNat.Decode(result, env);
+        if (n is not null)
+            Console.WriteLine($"  Nat    : {n}");
+        else
+            Console.WriteLine("  Nat    : (not a Church numeral or exceeds decode limit)");
     }
     catch (Exception ex)
     {
@@ -158,7 +266,7 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent)
                 }
             }
             // Non-definition lines in a file: evaluate and print.
-            RunLine(line, env);
+            RunLine(line, env, false);
         }
         catch (Exception ex)
         {
@@ -325,7 +433,8 @@ namespace SKI
 
     static class Expander
     {
-        /// <summary>Recursively substitutes all NameRef nodes with their stored definitions.</summary>
+        /// <summary>Recursively substitutes all NameRef nodes with their stored definitions.
+        /// Used by :expand command and :nat decoder — NOT called before normal reduction.</summary>
         public static Expr Expand(Expr expr, Dictionary<string, Expr> env,
                                   HashSet<string>? expanding = null)
         {
@@ -348,6 +457,14 @@ namespace SKI
                     return expr;   // Combinator — nothing to expand
             }
         }
+
+        /// <summary>Returns true if <paramref name="expr"/> contains a direct NameRef to <paramref name="name"/>.</summary>
+        public static bool ContainsName(Expr expr, string name) => expr switch
+        {
+            NameRef nr      => nr.Name == name,
+            App(var f, var x) => ContainsName(f, name) || ContainsName(x, name),
+            _               => false
+        };
     }
 
     // ── Reducer ───────────────────────────────────────────────────────────────
@@ -356,13 +473,18 @@ namespace SKI
     {
         private const int MaxSteps = 1_000_000;
 
-        /// <summary>Fully reduces an expression using normal-order (outermost-leftmost) reduction.</summary>
-        public static Expr Reduce(Expr expr)
+        /// <summary>Fully reduces an expression using normal-order (outermost-leftmost) reduction.
+        /// Name references are resolved lazily during reduction — no pre-expansion needed.
+        /// <paramref name="trace"/> receives each intermediate expression if non-null.</summary>
+        public static Expr Reduce(Expr expr, Dictionary<string, Expr> env, TextWriter? trace)
         {
-            for (int step = 0; step < MaxSteps; step++)
+            int step = 0;
+            for (; step < MaxSteps; step++)
             {
-                var next = Step(expr);
+                var next = Step(expr, env);
                 if (next is null) return expr;   // normal form
+                if (trace is not null)
+                    trace.WriteLine($"  [{step + 1,6}] {next}");
                 expr = next;
             }
             throw new InvalidOperationException($"Reduction did not terminate after {MaxSteps} steps.");
@@ -376,14 +498,14 @@ namespace SKI
         ///   (inFun=true,  other=arg) — descended into function position; arg is the sibling
         ///   (inFun=false, other=fun) — descended into argument position; fun is the sibling
         /// </summary>
-        private static Expr? Step(Expr root)
+        private static Expr? Step(Expr root, Dictionary<string, Expr> env)
         {
             var path = new Stack<(bool inFun, Expr other)>(32);
             var focus = root;
 
             while (true)
             {
-                if (TryRedex(focus, out var reduced))
+                if (TryRedex(focus, env, out var reduced))
                     return Rebuild(reduced, path);
 
                 if (focus is App(var f, var x))
@@ -393,7 +515,7 @@ namespace SKI
                     continue;
                 }
 
-                // Leaf (Combinator) — backtrack up the path
+                // Leaf (Combinator or unresolvable NameRef) — backtrack up the path
                 while (true)
                 {
                     if (path.Count == 0) return null;       // whole tree is normal form
@@ -424,11 +546,24 @@ namespace SKI
             return node;
         }
 
-        private static bool TryRedex(Expr expr, out Expr result)
+        private static bool TryRedex(Expr expr, Dictionary<string, Expr> env, out Expr result)
         {
+            // NameRef — resolve lazily from the environment
+            if (expr is NameRef(var refName))
+            {
+                if (env.TryGetValue(refName, out var def))
+                { result = def; return true; }
+                // Undefined name stays as-is (will surface as a stuck term)
+                result = default!;
+                return false;
+            }
+
             // I x  →  x
             if (expr is App(Combinator { Name: 'I' }, var x))
             { result = x; return true; }
+
+            // I applied lazily: if the function position holds a NameRef that resolves to I
+            // (handled by the NameRef case above — the ref is replaced first, then re-evaluated)
 
             // K x y  →  x
             if (expr is App(App(Combinator { Name: 'K' }, var kx), _))
@@ -457,6 +592,78 @@ namespace SKI
 
             result = default!;
             return false;
+        }
+    }
+
+    // ── Church-numeral decoder ────────────────────────────────────────────────
+
+    static class ChurchNat
+    {
+        private const int MaxN = 10_000;
+
+        /// <summary>
+        /// Decodes a fully-reduced Church numeral by applying it to a counter function.
+        /// Strategy: reduce (n SUCC_MARKER ZERO_MARKER) step by step, counting I-like
+        /// unfolding — or simply apply n to a fresh sentinel and count applications.
+        ///
+        /// Practical approach: reduce (expr f z) where f = a fresh "tick" name that
+        /// increments a counter, using a lightweight direct evaluation.
+        /// We use the algebraic identity: a normal-form Church numeral n applied to
+        /// SUCC and ZERO should reduce to the n-th numeral literal.  Instead we
+        /// evaluate n applied to a sentinel successor atom and a sentinel zero atom
+        /// and count how many times the successor appears in the spine.
+        /// </summary>
+        public static int? Decode(Expr result, Dictionary<string, Expr> env)
+        {
+            // Strategy: apply the result to a fresh sentinel successor S' and a fresh
+            // sentinel zero Z', reduce, then count the depth of the S'-application
+            // spine in the output.
+            //
+            // We use single-character sentinel atoms that cannot appear in any real
+            // SKI expression (they're outside A-Z and not valid identifiers), stored
+            // as Combinator nodes with custom names.
+            var tick = new Combinator('\u0001');   // successor sentinel (non-printable)
+            var zero = new Combinator('\u0002');   // zero sentinel
+
+            // Build ((result tick) zero) and reduce it.
+            Expr applied = new App(new App(result, tick), zero);
+
+            // Use a local env copy that maps the sentinels if needed (they have no
+            // reduction rules so they stay as atoms — exactly what we want).
+            Expr reduced;
+            try
+            {
+                reduced = Reducer.Reduce(applied, env, null);
+            }
+            catch
+            {
+                return null;
+            }
+
+            // Now count how many times `tick` wraps around `zero` in the result.
+            // A Church n applied to tick and zero produces:
+            //   n=0: zero
+            //   n=1: (tick zero)
+            //   n=2: (tick (tick zero))
+            //   n=k: (tick^k zero)
+            return CountTickSpine(reduced, tick, zero);
+        }
+
+        private static int? CountTickSpine(Expr e, Combinator tick, Combinator zero)
+        {
+            int count = 0;
+            while (true)
+            {
+                if (e == zero) return count;
+                if (e is App(var f, var inner) && f == tick)
+                {
+                    count++;
+                    if (count > MaxN) return null;
+                    e = inner;
+                    continue;
+                }
+                return null;  // unexpected shape
+            }
         }
     }
 }
