@@ -109,42 +109,57 @@ Built-in names (`S K I B C W Y`) cannot be redefined by user code.
 | `(expr)` | Evaluate and print the reduced form |
 | `Name = expr` | Define `Name` and add it to the environment |
 | `:load <file.ski>` | Load definitions (and any bare expressions) from a file |
+| `:save <file.ski>` | Write all current definitions to a `.ski` file |
 | `:env` | List all defined names alphabetically with their bodies |
 | `:env <pattern>` | List definitions whose name contains `pattern` (case-insensitive) |
+| `:undef <Name>` | Remove a definition from the environment |
 | `:expand <expr>` | Show the fully-expanded SKI tree (all names substituted) without reducing |
 | `:nat <expr>` | Reduce `expr` and decode the result as a Church numeral integer |
+| `:bool <expr>` | Reduce `expr` and decode the result as a Church boolean (`TRUE`/`FALSE`) |
+| `:bench <expr>` | Reduce `expr` and report the step count and wall-clock time |
 | `:trace` | Toggle step-by-step reduction output (prints each intermediate expression) |
 | `:reset` | Clear all user-defined names and reload `init.ski` |
 | `:help` / `:?` | Print the command reference |
 | `exit` | Quit the REPL |
+
+**Multi-line input:** end any line with `\` to continue on the next line:
+
+```
+> ((ADD TWO) \
+    THREE)
+  Result : ...
+```
 
 **Example session:**
 
 ```
 > TRUE = K
   Defined TRUE = K
-> FALSE = (K I)
-  Defined FALSE = (K I)
-> (((TRUE S) K) I)
-  Parsed : (((TRUE S) K) I)
-  Result : S
+> :bool ((AND TRUE) FALSE)
+  Result : (K I)
+  Bool   : FALSE
 > :nat ((ADD TWO) THREE)
-  Result : ((S ((B B) ((S B) I))) ((S B) ((S B) I)))
+  Result : ...
   Nat    : 5
+> :bench ((POW TWO) TEN)
+  Result : ...
+  Steps  : 24  (0 ms)
 > :expand NOT
   Expanded: C
+> :undef TRUE
+  Removed TRUE
+> :save mylib.ski
+  Saved 62 definition(s) to 'mylib.ski'
 > :trace
   Trace : ON
 > ((K S) K)
-  Parsed : ((K S) K)
   [     1] S
   Result : S
 > :trace
   Trace : OFF
 > :env bool
-  AND    = ((S S) (K FALSE))
+  AND    = ...
   FALSE  = (K I)
-  IF     = I
   ...
 ```
 
@@ -375,7 +390,18 @@ Lists are encoded with a Church-style cons structure.
 
 ### Reading boolean results
 
-Since `TRUE = K` and `FALSE = (K I)`, you can "decode" a boolean `b` by applying it to two distinct normal-form atoms:
+The easiest way is the `:bool` REPL command — it reduces the expression and decodes it automatically:
+
+```
+> :bool ((AND TRUE) FALSE)
+  Result : (K I)
+  Bool   : FALSE
+> :bool ((OR FALSE) TRUE)
+  Result : K
+  Bool   : TRUE
+```
+
+For use inside a `.ski` expression, apply the boolean to two distinct sentinel values. Since `TRUE = K` selects first and `FALSE = KI` selects second:
 
 ```
 (((b S) K) I)   ;  → S  means TRUE

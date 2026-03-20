@@ -37,12 +37,26 @@ else
     while (true)
     {
         Console.Write("> ");
-        var line = Console.ReadLine();
-        if (line is null || line.Equals("exit", StringComparison.OrdinalIgnoreCase))
+        var rawLine = Console.ReadLine();
+        if (rawLine is null || rawLine.Equals("exit", StringComparison.OrdinalIgnoreCase))
             break;
-        if (string.IsNullOrWhiteSpace(line))
+        if (string.IsNullOrWhiteSpace(rawLine))
             continue;
-        var trimmed = line.Trim();
+
+        // Multi-line continuation: a line ending with '\' is joined with the next.
+        var sb = new System.Text.StringBuilder(rawLine.TrimEnd());
+        while (sb.Length > 0 && sb[^1] == '\\')
+        {
+            sb.Remove(sb.Length - 1, 1);
+            Console.Write("  ");
+            var cont = Console.ReadLine();
+            if (cont is null) break;
+            sb.Append(' ');
+            sb.Append(cont.Trim());
+        }
+        var trimmed = sb.ToString().Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+            continue;
 
         // :load <path>
         if (trimmed.StartsWith(":load", StringComparison.OrdinalIgnoreCase))
@@ -110,6 +124,57 @@ else
             continue;
         }
 
+        // :bool <expr>  — reduce and decode as Church boolean
+        if (trimmed.StartsWith(":bool", StringComparison.OrdinalIgnoreCase))
+        {
+            var rest = trimmed[5..].Trim();
+            if (rest.Length == 0)
+                Cwl("  Usage: :bool <expr>", ConsoleColor.DarkGray);
+            else
+                BoolLine(rest, env);
+            continue;
+        }
+
+        // :undef <name>  — remove a definition from the environment
+        if (trimmed.StartsWith(":undef", StringComparison.OrdinalIgnoreCase))
+        {
+            var name = trimmed[6..].Trim();
+            if (name.Length == 0)
+                Cwl("  Usage: :undef <name>", ConsoleColor.DarkGray);
+            else if (Combinators.IsBuiltin(name))
+                Cwl($"  Error  : Cannot undefine built-in '{name}'.", ConsoleColor.Red);
+            else if (!env.ContainsKey(name))
+                Cwl($"  Error  : '{name}' is not defined.", ConsoleColor.DarkYellow);
+            else
+            {
+                env.Remove(name);
+                Cwl($"  Removed {name}", ConsoleColor.DarkGray);
+            }
+            continue;
+        }
+
+        // :bench <expr>  — reduce and report step count
+        if (trimmed.StartsWith(":bench", StringComparison.OrdinalIgnoreCase))
+        {
+            var rest = trimmed[6..].Trim();
+            if (rest.Length == 0)
+                Cwl("  Usage: :bench <expr>", ConsoleColor.DarkGray);
+            else
+                BenchLine(rest, env);
+            continue;
+        }
+
+        // :save <file>  — write all current definitions to a .ski file
+        if (trimmed.StartsWith(":save", StringComparison.OrdinalIgnoreCase))
+        {
+            var path = trimmed[5..].Trim();
+            if (path.Length == 0)
+                Cwl("  Usage: :save <file.ski>", ConsoleColor.DarkGray);
+            else
+                SaveEnv(path, env);
+            continue;
+        }
+
         // :help
         if (trimmed.Equals(":help", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals(":?", StringComparison.OrdinalIgnoreCase))
@@ -132,12 +197,17 @@ static void PrintHelp(string? initPath)
     Console.WriteLine("         B x y z=x(yz)  C x y z=xzy  W x y=xyy  Y f=f(Yf)");
     Console.WriteLine("Commands:");
     Console.WriteLine("  :load <file>    load definitions/expressions from a .ski file");
+    Console.WriteLine("  :save <file>    save all current definitions to a .ski file");
     Console.WriteLine("  :env [pat]      list defined names (optionally filtered)");
+    Console.WriteLine("  :undef <name>   remove a definition from the environment");
     Console.WriteLine("  :expand <expr>  show fully-expanded SKI tree (no reduction)");
     Console.WriteLine("  :nat <expr>     reduce and decode result as a Church numeral");
+    Console.WriteLine("  :bool <expr>    reduce and decode result as a Church boolean");
+    Console.WriteLine("  :bench <expr>   reduce and report the number of steps taken");
     Console.WriteLine("  :trace          toggle step-by-step reduction trace");
     Console.WriteLine("  :reset          clear user definitions and reload init.ski");
     Console.WriteLine("  :help           show this message");
+    Console.WriteLine("  Tip: end a line with \\ to continue on the next line");
     Console.WriteLine("  exit            quit");
     if (initPath is not null)
         Console.WriteLine($"Loaded : {initPath}");
@@ -218,6 +288,66 @@ static void NatLine(string input, Dictionary<string, Expr> env)
             Cwl($"  Nat    : {n}", ConsoleColor.Green);
         else
             Cwl("  Nat    : (not a Church numeral or exceeds decode limit)", ConsoleColor.DarkYellow);
+    }
+    catch (Exception ex)
+    {
+        Cwl($"  Error  : {ex.Message}", ConsoleColor.Red);
+    }
+}
+
+static void BoolLine(string input, Dictionary<string, Expr> env)
+{
+    try
+    {
+        var tokens = Lexer.Tokenize(input);
+        var expr = Parser.Parse(tokens, env);
+        if (tokens.Count > 0)
+            throw new FormatException("Unexpected tokens after expression.");
+        var result = Reducer.Reduce(expr, env, null);
+        Cwl($"  Result : {result}", ConsoleColor.DarkGray);
+        var b = ChurchBool.Decode(result, env);
+        if (b is true)
+            Cwl("  Bool   : TRUE", ConsoleColor.Green);
+        else if (b is false)
+            Cwl("  Bool   : FALSE", ConsoleColor.Yellow);
+        else
+            Cwl("  Bool   : (not a Church boolean)", ConsoleColor.DarkYellow);
+    }
+    catch (Exception ex)
+    {
+        Cwl($"  Error  : {ex.Message}", ConsoleColor.Red);
+    }
+}
+
+static void BenchLine(string input, Dictionary<string, Expr> env)
+{
+    try
+    {
+        var tokens = Lexer.Tokenize(input);
+        var expr = Parser.Parse(tokens, env);
+        if (tokens.Count > 0)
+            throw new FormatException("Unexpected tokens after expression.");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var (result, steps) = Reducer.ReduceWithCount(expr, env);
+        sw.Stop();
+        Cwl($"  Result : {result}", ConsoleColor.Cyan);
+        Cwl($"  Steps  : {steps:N0}  ({sw.ElapsedMilliseconds} ms)", ConsoleColor.DarkGray);
+    }
+    catch (Exception ex)
+    {
+        Cwl($"  Error  : {ex.Message}", ConsoleColor.Red);
+    }
+}
+
+static void SaveEnv(string path, Dictionary<string, Expr> env)
+{
+    try
+    {
+        var lines = env
+            .OrderBy(kv => kv.Key)
+            .Select(kv => $"{kv.Key} = {kv.Value}");
+        File.WriteAllLines(path, lines);
+        Cwl($"  Saved {env.Count} definition(s) to '{path}'", ConsoleColor.DarkGray);
     }
     catch (Exception ex)
     {
@@ -369,7 +499,7 @@ namespace SKI
     // ── Tokens ────────────────────────────────────────────────────────────────
 
     enum TokenKind { LParen, RParen, Ident }
-    record Token(TokenKind Kind, string Value);
+    record Token(TokenKind Kind, string Value, int Position);
 
     // ── Lexer ─────────────────────────────────────────────────────────────────
 
@@ -383,17 +513,17 @@ namespace SKI
             {
                 char ch = source[i];
                 if (char.IsWhiteSpace(ch)) { i++; continue; }
-                if (ch == '(') { q.Enqueue(new Token(TokenKind.LParen, "(")); i++; continue; }
-                if (ch == ')') { q.Enqueue(new Token(TokenKind.RParen, ")")); i++; continue; }
+                if (ch == '(') { q.Enqueue(new Token(TokenKind.LParen, "(", i++)); continue; }
+                if (ch == ')') { q.Enqueue(new Token(TokenKind.RParen, ")", i++)); continue; }
                 if (char.IsLetter(ch) || ch == '_')
                 {
                     int start = i;
                     while (i < source.Length && (char.IsLetterOrDigit(source[i]) || source[i] == '_'))
                         i++;
-                    q.Enqueue(new Token(TokenKind.Ident, source[start..i]));
+                    q.Enqueue(new Token(TokenKind.Ident, source[start..i], start));
                     continue;
                 }
-                throw new FormatException($"Unexpected character '{ch}'.");
+                throw new FormatException($"Unexpected character '{ch}' at column {i + 1}.");
             }
             return q;
         }
@@ -415,27 +545,27 @@ namespace SKI
                 TokenKind.Ident   => Combinators.IsBuiltin(tok.Value)
                                         ? Combinators.FromName(tok.Value)
                                         : (Expr)new NameRef(tok.Value),
-                TokenKind.LParen  => ParseApp(tokens, env),
-                TokenKind.RParen  => throw new FormatException("Unexpected ')'.")
+                TokenKind.LParen  => ParseApp(tokens, env, tok.Position),
+                TokenKind.RParen  => throw new FormatException($"Unexpected ')' at column {tok.Position + 1}.")
                 ,
-                _ => throw new FormatException($"Unexpected token '{tok.Value}'.")
+                _ => throw new FormatException($"Unexpected token '{tok.Value}' at column {tok.Position + 1}.")
             };
         }
 
-        private static Expr ParseApp(Queue<Token> tokens, Dictionary<string, Expr> env)
+        private static Expr ParseApp(Queue<Token> tokens, Dictionary<string, Expr> env, int openParenPos)
         {
             // Parse the function and at least one argument, then keep consuming
             // additional arguments until ')' — left-associative: (f a b c) = (((f a) b) c).
             var result = Parse(tokens, env);
 
             if (tokens.Count == 0 || tokens.Peek().Kind == TokenKind.RParen)
-                throw new FormatException("Application requires at least one argument.");
+                throw new FormatException($"Application requires at least one argument (column {openParenPos + 1}).");
 
             while (tokens.Count > 0 && tokens.Peek().Kind != TokenKind.RParen)
                 result = new App(result, Parse(tokens, env));
 
             if (tokens.Count == 0)
-                throw new FormatException("Expected ')' to close application.");
+                throw new FormatException($"Expected ')' to close '(' at column {openParenPos + 1}.");
             tokens.Dequeue(); // consume ')'
 
             return result;
@@ -498,6 +628,19 @@ namespace SKI
                 if (next is null) return expr;   // normal form
                 if (trace is not null)
                     trace.WriteLine($"  [{step + 1,6}] {next}");
+                expr = next;
+            }
+            throw new InvalidOperationException($"Reduction did not terminate after {MaxSteps} steps.");
+        }
+
+        /// <summary>Like <see cref="Reduce"/> but also returns the step count.</summary>
+        public static (Expr Result, int Steps) ReduceWithCount(Expr expr, Dictionary<string, Expr> env)
+        {
+            int step = 0;
+            for (; step < MaxSteps; step++)
+            {
+                var next = Step(expr, env);
+                if (next is null) return (expr, step);
                 expr = next;
             }
             throw new InvalidOperationException($"Reduction did not terminate after {MaxSteps} steps.");
@@ -677,6 +820,32 @@ namespace SKI
                 }
                 return null;  // unexpected shape
             }
+        }
+    }
+
+    // ── Church-boolean decoder ────────────────────────────────────────────────
+
+    static class ChurchBool
+    {
+        /// <summary>
+        /// Decodes a Church boolean by applying it to two distinct sentinel atoms
+        /// and checking which one comes out after reduction.
+        /// TRUE  = K  → selects first  → returns trueS
+        /// FALSE = KI → selects second → returns falseS
+        /// </summary>
+        public static bool? Decode(Expr result, Dictionary<string, Expr> env)
+        {
+            var trueS  = new Combinator('\u0003');   // sentinel "true"  atom
+            var falseS = new Combinator('\u0004');   // sentinel "false" atom
+            Expr applied = new App(new App(result, trueS), falseS);
+            try
+            {
+                var reduced = Reducer.Reduce(applied, env, null);
+                if (reduced == trueS)  return true;
+                if (reduced == falseS) return false;
+                return null;
+            }
+            catch { return null; }
         }
     }
 
