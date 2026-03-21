@@ -104,6 +104,16 @@ PRED    = ((B FST) ((C ((S I) (K STEP))) ((PAIR ZERO) ZERO)))
 # SUB m n = n PRED m  =>  B (S (S I (K PRED))) K
 SUB     = ((B (S ((S I) (K PRED)))) K)
 
+# DIV m n = floor(m / n)  — requires n > 0; n = 0 diverges
+# DIVF rec m n = (LEQ n m) (SUCC (rec (SUB m n) n)) ZERO
+DIVF rec m n = ((((LEQ n) m) (SUCC ((rec ((SUB m) n)) n))) ZERO)
+DIV     = (Y DIVF)
+
+# MOD m n = m mod n  — requires n > 0; n = 0 diverges
+# MODF rec m n = (LEQ n m) (rec (SUB m n) n) m
+MODF rec m n = ((((LEQ n) m) ((rec ((SUB m) n)) n)) m)
+MOD     = (Y MODF)
+
 # ISZERO n = n (K FALSE) TRUE
 ISZERO  = ((C ((S I) (K (K FALSE)))) TRUE)
 

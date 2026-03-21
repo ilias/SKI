@@ -1,12 +1,12 @@
-# SKI(BCWY) Combinator Calculus Interpreter
+# SKI(BCWYMT) Combinator Calculus Interpreter
 
-A complete combinator calculus interpreter written in C# (.NET 10). Supports the full **SKI + BCWY** basis, a named-definition system, a standard library (`init.ski`), and an interactive REPL.
+A complete combinator calculus interpreter written in C# (.NET 10). Supports the full **SKI + BCWYMT** basis, a named-definition system, a standard library (`init.ski`), and an interactive REPL.
 
 ---
 
 ## Table of Contents
 
-- [SKI(BCWY) Combinator Calculus Interpreter](#skibcwy-combinator-calculus-interpreter)
+- [SKI(BCWYMT) Combinator Calculus Interpreter](#skibcwymt-combinator-calculus-interpreter)
   - [Table of Contents](#table-of-contents)
   - [Getting Started](#getting-started)
   - [Expression Syntax](#expression-syntax)
@@ -33,6 +33,7 @@ A complete combinator calculus interpreter written in C# (.NET 10). Supports the
   - [Lambda Abstraction](#lambda-abstraction)
   - [Parameterized Definitions](#parameterized-definitions)
   - [Let-Expressions](#let-expressions)
+  - [Letrec-Expressions](#letrec-expressions)
   - [Import Directive](#import-directive)
   - [Integer Literals](#integer-literals)
   - [Limitations](#limitations)
@@ -67,7 +68,7 @@ A parenthesised form `(f a b c ...)` applies `f` to all arguments **left-associa
 
 The old fully-explicit nesting `((f a) b)` still works identically — the two forms are interchangeable.
 
-**Atoms** are either a single uppercase letter (`S K I B C W Y`), a user-defined name (`[A-Za-z][A-Za-z0-9_]*`), or a non-negative **integer literal** (`0`, `42`, …).
+**Atoms** are either a single uppercase letter (`S K I B C W Y M T`), a user-defined name (`[A-Za-z][A-Za-z0-9_]*`), or a non-negative **integer literal** (`0`, `42`, …).
 
 **Grammar:**
 
@@ -77,7 +78,8 @@ line  = Name params '=' expr                    ;  definition (params may be emp
 expr  = ATOM
       | integer                                ;  Church numeral literal
       | '\' ident+ '.' expr                   ;  lambda abstraction
-      | 'let' ident params '=' expr 'in' expr  ;  local binding
+      | 'let'    ident params '=' expr 'in' expr  ;  local binding (non-recursive)
+      | 'letrec' ident params '=' expr 'in' expr  ;  recursive local binding (Y-based)
       | '(' expr expr+ ')'                     ;  left-associative application
 params = ident*
 ```
@@ -97,10 +99,15 @@ Comments start with `#` and run to the end of the line.
 | `C` | `C x y z → x z y` | Flip (argument order swap) |
 | `W` | `W x y → x y y` | Duplication |
 | `Y` | `(Y f) x → f (Y f) x` | Fixed-point (lazy) |
+| `M` | `M x → x x` | Mockingbird (self-application) |
+| `T` | `T x y → y x` | Thrush (reverse-application) |
 
 > **Y is lazy**: `Y f` alone is a normal form. It only unfolds when applied to an argument, preventing infinite expansion.
 
-Built-in names (`S K I B C W Y`) cannot be redefined by user code.
+> **M** is `W I` / `S I I` in the classic SKI basis; provided as a built-in for efficiency and readability.  
+> **T** is `C I` in the classic basis; provided likewise.
+
+Built-in names (`S K I B C W Y M T`) cannot be redefined by user code.
 
 ---
 
@@ -137,7 +144,25 @@ Built-in names (`S K I B C W Y`) cannot be redefined by user code.
 | `:help` / `:?` | Print the command reference |
 | `exit` | Quit the REPL |
 
-**History and auto-complete:** The REPL supports command history (Up/Down arrow keys to navigate previous inputs) and Tab-completion for `:commands`, built-in combinator names (`S K I B C W Y`), and all user-defined names.
+**History and auto-complete:** The REPL supports command history (Up/Down arrow keys to navigate previous inputs) and Tab-completion for `:commands`, built-in combinator names (`S K I B C W Y M T`), and all user-defined names.
+
+**Auto-decode hints:** After every evaluation the result is automatically probed as a Church boolean, numeral, and list. Matches are printed as a `Hint` line in magenta:
+
+```
+> ((ADD TWO) THREE)
+  Result : ...
+  Hint   : Nat 5
+
+> ZERO
+  Result : (K I)
+  Hint   : Bool FALSE  /  Nat 0
+
+> ((CONS S) ((CONS K) NIL))
+  Result : ...
+  Hint   : List [S, K]  (length 2)
+```
+
+The `:nat`, `:bool`, and `:list` commands still work for cases where you want explicit decoding with a higher step budget.
 
 **Multi-line input:** end any line with `\` to continue on the next line:
 
@@ -254,6 +279,8 @@ Loaded automatically at startup. All 62 definitions use strictly binary `(f x)` 
 | `FLIP` | `C` | Argument flip: `FLIP f x y = f y x` |
 | `DUP` | `W` | Duplicate argument: `DUP f x = f x x` |
 | `FIX` | `Y` | Fixed-point combinator (lazy) |
+| `MOCK` | `M` | Self-application: `MOCK x = x x` |
+| `THRUSH` | `T` | Reverse-application: `THRUSH x y = y x` |
 
 ---
 
@@ -329,6 +356,8 @@ A Church numeral `n` represents the natural number $n$ as `n f x = f^n x` — ap
 | `MUL` | Multiplication: `MUL m n = m*n` (= `B`) | `((MUL TWO) THREE) = SIX` |
 | `POW` | Exponentiation: `POW m n = m^n` (= `C I`) | `((POW TWO) THREE) = EIGHT` |
 | `SUB` | Subtraction (clamped at 0): `SUB m n = max(m-n, 0)` | `((SUB THREE) ONE) = TWO`, `((SUB ONE) THREE) = ZERO` |
+| `DIV` | Integer division (floor): `DIV m n = ⌊m/n⌋` — **n > 0 required** | `((DIV SIX) TWO) = THREE`, `((DIV SEVEN) TWO) = THREE` |
+| `MOD` | Remainder: `MOD m n = m mod n` — **n > 0 required** | `((MOD SEVEN) THREE) = ONE`, `((MOD SIX) TWO) = ZERO` |
 
 #### Predicates & Comparisons
 
@@ -370,6 +399,10 @@ A Church numeral `n` represents the natural number $n$ as `n f x = f^n x` — ap
 ((((EQ ((POW TWO) THREE)) EIGHT) S) K) # → S  (TRUE)
 ((((LEQ TWO) THREE) S) K)          # → S  (TRUE)
 ((((GT THREE) TWO) S) K)           # → S  (TRUE)
+((((EQ ((DIV TEN) THREE)) THREE) S) K)  # → S  (⌊10/3⌋ = 3)
+((((EQ ((MOD TEN) THREE)) ONE) S) K)    # → S  (10 mod 3 = 1)
+# Euclidean identity: DIV m n * n + MOD m n = m
+((((EQ ((ADD ((MUL ((DIV 7) 3)) 3)) ((MOD 7) 3))) 7) S) K)   # → S  (TRUE)
 ```
 
 ---
@@ -628,6 +661,48 @@ let x = TWO in let y = THREE in ((((EQ ((ADD x) y)) FIVE) S) K)    # → S  (TRU
 ```
 
 > **Note:** `let` bindings use the same name-resolution as top-level definitions and lambda parameters; shadowing is supported.
+
+---
+
+## Letrec-Expressions
+
+A `letrec`-expression introduces a **recursive** local binding:
+
+```
+letrec f params = body in e2
+```
+
+This is syntactic sugar for `(\ f. e2) (Y (\f params. body))`. The name `f` is abstracted over both the body and the continuation `e2`, with `Y` providing the self-reference. Like `let`, it compiles entirely to SKI at parse time.
+
+**Syntax rule:** `letrec` may appear anywhere a sub-expression is expected and may be nested. The `in` body may itself contain `let` or `letrec`.
+
+**Warning:** `letrec f = body in e2` with no parameters produces `(\ f. e2) (Y (\ f. body))`. If `body` does not mention `f`, the Y-wrapping is harmless. If `body` mentions `f` without an outer lambda, be careful of the same eager-divergence caveat that applies to top-level `FOO = (Y FOOF)`.
+
+**Examples:**
+
+```
+# Factorial  (5! = 120)
+letrec fact n = ((ISZERO n) ONE ((MUL n) (fact (PRED n)))) in (fact FIVE)
+  Result : ...
+  Hint   : Nat 120
+
+# Triangular numbers  tri 4 = 1+2+3+4 = 10
+letrec tri n = ((ISZERO n) ZERO ((ADD n) (tri (PRED n)))) in (tri FOUR)
+  Result : ...
+  Hint   : Nat 10
+
+# Fibonacci
+letrec fib n = (((ISZERO n) ZERO) (((ISZERO (PRED n)) ONE)
+    ((ADD (fib (PRED n))) (fib (PRED (PRED n)))))) in (fib SIX)
+  Result : ...
+  Hint   : Nat 8
+
+# Nested let + letrec
+let base = THREE in
+  letrec pow n = ((ISZERO n) ONE ((MUL base) (pow (PRED n)))) in
+    (pow TWO)     # 3^2 = 9
+  Hint   : Nat 9
+```
 
 ---
 

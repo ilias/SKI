@@ -546,3 +546,95 @@ import testlib.ski
 
 # Imported + parameterized: DOUBLE_NAT applied via let binding
 let dn = DOUBLE_NAT in ((((EQ (dn FOUR)) EIGHT) S) K)
+
+# ============================================================================
+# 18. DIV AND MOD
+# ============================================================================
+
+# DIV 6 2 = 3  (exact)
+((((EQ ((DIV 6) 2)) THREE) S) K)
+
+# DIV 7 2 = 3  (floor: 7/2 = 3.5 → 3)
+((((EQ ((DIV 7) 2)) THREE) S) K)
+
+# DIV 0 5 = 0  (zero numerator)
+((((EQ ((DIV 0) 5)) ZERO) S) K)
+
+# DIV 5 5 = 1  (equal numerator and denominator)
+((((EQ ((DIV 5) 5)) ONE) S) K)
+
+# DIV 10 3 = 3  (floor(10/3) = 3)
+((((EQ ((DIV 10) 3)) THREE) S) K)
+
+# DIV 1 5 = 0  (numerator < denominator)
+((((EQ ((DIV 1) 5)) ZERO) S) K)
+
+# MOD 7 3 = 1  (7 = 2*3 + 1)
+((((EQ ((MOD 7) 3)) ONE) S) K)
+
+# MOD 6 2 = 0  (exact)
+((((EQ ((MOD 6) 2)) ZERO) S) K)
+
+# MOD 5 5 = 0  (equal args)
+((((EQ ((MOD 5) 5)) ZERO) S) K)
+
+# MOD 3 5 = 3  (numerator < denominator returns numerator unchanged)
+((((EQ ((MOD 3) 5)) THREE) S) K)
+
+# MOD 10 3 = 1  (10 = 3*3 + 1)
+((((EQ ((MOD 10) 3)) ONE) S) K)
+
+# Euclidean identity: DIV m n * n + MOD m n = m
+# 7 = DIV 7 3 * 3 + MOD 7 3 = 2*3 + 1 = 7
+((((EQ ((ADD ((MUL ((DIV 7) 3)) 3)) ((MOD 7) 3))) 7) S) K)
+
+# 10 = DIV 10 4 * 4 + MOD 10 4 = 2*4 + 2 = 10
+((((EQ ((ADD ((MUL ((DIV 10) 4)) 4)) ((MOD 10) 4))) 10) S) K)
+
+# ============================================================================
+# 19. M AND T COMBINATORS
+# ============================================================================
+
+# M I = I I = I  (self-application of identity)
+(M I)
+
+# M K  →  K K  (self-application of K)
+(M K)
+
+# T S K = K S  (reverse-apply: gives K applied to S)
+# Verify T S K applied to I = (K S) I = S
+(((T S) K) I)
+
+# T ONE SUCC = SUCC ONE = TWO
+((((EQ ((T ONE) SUCC)) TWO) S) K)
+
+# T TWO SUCC = SUCC TWO = THREE
+((((EQ ((T TWO) SUCC)) THREE) S) K)
+
+# MOCK = M  (alias)
+(MOCK I)
+
+# THRUSH = T  (alias)
+((((EQ ((THRUSH TWO) SUCC)) THREE) S) K)
+
+# ============================================================================
+# 20. LETREC EXPRESSIONS  (letrec f x = body in e  →  (\f. e) (Y (\f x. body)))
+# ============================================================================
+
+# Factorial via letrec: 5! = 120  [auto-hint verifies: Nat 120]
+letrec fact n = ((ISZERO n) ONE ((MUL n) (fact (PRED n)))) in (fact FIVE)
+
+# Factorial using EQ — letrec in argument position requires no extra outer parens
+((((EQ letrec fact2 n = ((ISZERO n) ONE ((MUL n) (fact2 (PRED n)))) in (fact2 FIVE)) ((MUL ((MUL ((MUL ((MUL 1) 2)) 3)) 4)) 5)) S) K)
+
+# Triangular numbers: tri 4 = 0+1+2+3+4 = 10  [hint: Nat 10]
+letrec tri n = ((ISZERO n) ZERO ((ADD n) (tri (PRED n)))) in (tri FOUR)
+
+# Fibonacci: fib 6 = 8  [hint: Nat 8] (all on one line for .ski file)
+letrec fib n = (((ISZERO n) ZERO) (((ISZERO (PRED n)) ONE) ((ADD (fib (PRED n))) (fib (PRED (PRED n)))))) in (fib SIX)
+
+# Identity-like recursion: count n returns n unchanged  [hint: Nat 3]
+letrec count n = ((ISZERO n) ZERO (SUCC (count (PRED n)))) in (count THREE)
+
+# Nested let + letrec: 3^2 = 9  [hint: Nat 9]
+let base = THREE in letrec pow n = ((ISZERO n) ONE ((MUL base) (pow (PRED n)))) in (pow TWO)
