@@ -11,6 +11,8 @@ COMPOSE = B                    # compose f g x = f (g x)
 FLIP    = C                    # flip f x y = f y x
 DUP     = W                    # dup f x = f x x
 FIX     = Y                    # fix f = f (fix f)  [lazy]
+MOCK    = M                    # mockingbird: M x = x x
+THRUSH  = T                    # thrush: T x y = y x  (reverse-apply)
 
 # ============================================================================
 # BOOLEANS  (Church encoding: bool = \t f -> t/f)

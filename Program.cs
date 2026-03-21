@@ -1,10 +1,10 @@
-﻿// SKI(BCWY) Combinator Calculus Interpreter
+﻿// SKI(BCWYMT) Combinator Calculus Interpreter
 // Grammar:
 //   line = Name '=' expr      (definition)
 //        | expr               (reduction)
 //        | let x = e1 in e2  (local binding, desugars to (\x. e2) e1)
 //   expr = ATOM | '(' expr expr ')'
-//   ATOM = S | K | I | B | C | W | Y | <user-defined Name>
+//   ATOM = S | K | I | B | C | W | Y | M | T | <user-defined Name>
 //
 // Reduction rules:
 //   I x       →  x
@@ -13,6 +13,8 @@
 //   B x y z   →  x (y z)          (composition)
 //   C x y z   →  x z y            (flip)
 //   W x y     →  x y y            (duplication)
+//   M x       →  x x              (Mockingbird / self-application)
+//   T x y     →  y x              (Thrush / reverse-application)
 //   Y f (lazy)→  f (Y f) applied to next argument
 //
 // Lambda abstraction: \x y. body  — compiled to SKI via bracket abstraction
@@ -272,11 +274,12 @@ static void PrintHelp(string? initPath)
     Console.WriteLine("Let    : let x = e1 in e2  local binding (sugar for (\\x. e2) e1)");
     Console.WriteLine("Letrec : letrec f x = body in e2  recursive binding (sugar for let f = Y (\\f x. body))");;
     Console.WriteLine("Nums   : 0  42  etc.  converted to Church numerals at parse time");
-    Console.WriteLine("Atoms  : S  K  I  B  C  W  Y  <Name>");
+    Console.WriteLine("Atoms  : S  K  I  B  C  W  Y  M  T  <Name>");
     Console.WriteLine("Define : Name = expr            simple definition");
     Console.WriteLine("         Name x y = expr        parameterized  (= Name = \\x y. expr)");
     Console.WriteLine("Rules  : I x=x  K x y=x  S x y z=(xz)(yz)");
     Console.WriteLine("         B x y z=x(yz)  C x y z=xzy  W x y=xyy  Y f=f(Yf)");
+    Console.WriteLine("         M x=xx  T x y=yx");
     Console.WriteLine("Import : import <path>  inside .ski files, loads another file");
     Console.WriteLine("Commands:");
     Console.WriteLine("  :load <file>    load definitions/expressions from a .ski file");
@@ -688,11 +691,14 @@ namespace SKI
         public static readonly Combinator C = new('C');
         public static readonly Combinator W = new('W');
         public static readonly Combinator Y = new('Y');
+        public static readonly Combinator M = new('M');  // Mockingbird: M x = x x
+        public static readonly Combinator T = new('T');  // Thrush:      T x y = y x
 
         private static readonly Dictionary<string, Combinator> Builtins = new(StringComparer.Ordinal)
         {
             ["S"] = S, ["K"] = K, ["I"] = I,
-            ["B"] = B, ["C"] = C, ["W"] = W, ["Y"] = Y
+            ["B"] = B, ["C"] = C, ["W"] = W, ["Y"] = Y,
+            ["M"] = M, ["T"] = T
         };
 
         public static bool IsBuiltin(string name) => Builtins.ContainsKey(name);
@@ -1290,10 +1296,23 @@ namespace SKI
                 case 'Y' when arity >= 2:
                 {
                     // (Y f) x → f (Y f) x    [lazy: only when applied to an arg]
-                    // f is first applied arg, x is second
                     var f = GetArg(0); var x = GetArg(1);
                     var yf = GNode.MakeApp(Atom('Y'), f);
                     RedexRoot(2).Redirect(GNode.MakeApp(GNode.MakeApp(f, yf), x));
+                    return true;
+                }
+                case 'M' when arity >= 1:
+                {
+                    // M x → x x   (Mockingbird)
+                    var x = GetArg(0);
+                    RedexRoot(1).Redirect(GNode.MakeApp(x, x));
+                    return true;
+                }
+                case 'T' when arity >= 2:
+                {
+                    // T x y → y x   (Thrush)
+                    var x = GetArg(0); var y = GetArg(1);
+                    RedexRoot(2).Redirect(GNode.MakeApp(y, x));
                     return true;
                 }
                 default:
@@ -1472,7 +1491,7 @@ namespace SKI
             "exit"
         ];
 
-        private static readonly string[] Builtins = ["S", "K", "I", "B", "C", "W", "Y"];
+        private static readonly string[] Builtins = ["S", "K", "I", "B", "C", "W", "Y", "M", "T"];
 
         private readonly Func<Dictionary<string, Expr>> _getEnv;
 
