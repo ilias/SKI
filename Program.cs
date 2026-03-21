@@ -361,6 +361,7 @@ static void RunLine(string input, Dictionary<string, Expr> env, bool trace, int 
         var result = Reducer.Reduce(expr, env, trace ? new ColorWriter(ConsoleColor.DarkGray) : null, maxSteps);
         Cwl($"  Result : {result}", ConsoleColor.Cyan);
         TryPrintHints(result, env, maxSteps);
+        Console.WriteLine();
     }
     catch (Exception ex)
     {
@@ -377,6 +378,7 @@ static void ExpandLine(string input, Dictionary<string, Expr> env)
         CheckNoTrailingTokens(tokens);
         var expanded = Expander.Expand(expr, env);
         Cwl($"  Expanded: {expanded}", ConsoleColor.Cyan);
+        Console.WriteLine();
     }
     catch (Exception ex)
     {
@@ -398,6 +400,7 @@ static void NatLine(string input, Dictionary<string, Expr> env, int maxSteps)
             Cwl($"  Nat    : {n}", ConsoleColor.Green);
         else
             Cwl("  Nat    : (not a Church numeral or exceeds decode limit)", ConsoleColor.DarkYellow);
+        Console.WriteLine();
     }
     catch (Exception ex)
     {
@@ -421,6 +424,7 @@ static void BoolLine(string input, Dictionary<string, Expr> env, int maxSteps)
             Cwl("  Bool   : FALSE", ConsoleColor.Yellow);
         else
             Cwl("  Bool   : (not a Church boolean)", ConsoleColor.DarkYellow);
+        Console.WriteLine();
     }
     catch (Exception ex)
     {
@@ -444,6 +448,7 @@ static void ListLine(string input, Dictionary<string, Expr> env, int maxSteps)
         else
             Cwl("  List   : (not a Church list, or ISNIL/HEAD/TAIL not defined)",
                 ConsoleColor.DarkYellow);
+        Console.WriteLine();
     }
     catch (Exception ex)
     {
@@ -464,6 +469,7 @@ static void BenchLine(string input, Dictionary<string, Expr> env, int maxSteps)
         Cwl($"  Result : {result}", ConsoleColor.Cyan);
         TryPrintHints(result, env, maxSteps);
         Cwl($"  Steps  : {steps:N0}  ({sw.ElapsedMilliseconds} ms)", ConsoleColor.DarkGray);
+        Console.WriteLine();
     }
     catch (Exception ex)
     {
