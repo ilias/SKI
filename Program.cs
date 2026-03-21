@@ -333,7 +333,12 @@ static void RunLine(string input, Dictionary<string, Expr> env, bool trace, int 
                 var bodyTokens = Lexer.Tokenize(bodyPart);
                 var body       = Parser.Parse(bodyTokens, env);
                 if (bodyTokens.Count > 0)
-                    throw new FormatException("Unexpected tokens after definition body.");
+                {
+                    var extra = bodyTokens.Peek();
+                    throw new FormatException(
+                        $"Unexpected '{extra.Value}' at column {extra.Position + 1} in definition body" +
+                        " — did you forget '(' around a multi-term expression?");
+                }
                 var fullBody = parms.Length > 0
                     ? BracketAbstract.AbstractAll(parms, body)
                     : body;
@@ -351,8 +356,7 @@ static void RunLine(string input, Dictionary<string, Expr> env, bool trace, int 
         // Otherwise it's an expression to reduce.
         var tokens = Lexer.Tokenize(input);
         var expr = Parser.Parse(tokens, env);
-        if (tokens.Count > 0)
-            throw new FormatException("Unexpected tokens after expression.");
+        CheckNoTrailingTokens(tokens);
         Cwl($"  Parsed : {expr}", ConsoleColor.DarkGray);
         var result = Reducer.Reduce(expr, env, trace ? new ColorWriter(ConsoleColor.DarkGray) : null, maxSteps);
         Cwl($"  Result : {result}", ConsoleColor.Cyan);
@@ -370,8 +374,7 @@ static void ExpandLine(string input, Dictionary<string, Expr> env)
     {
         var tokens = Lexer.Tokenize(input);
         var expr = Parser.Parse(tokens, env);
-        if (tokens.Count > 0)
-            throw new FormatException("Unexpected tokens after expression.");
+        CheckNoTrailingTokens(tokens);
         var expanded = Expander.Expand(expr, env);
         Cwl($"  Expanded: {expanded}", ConsoleColor.Cyan);
     }
@@ -387,8 +390,7 @@ static void NatLine(string input, Dictionary<string, Expr> env, int maxSteps)
     {
         var tokens = Lexer.Tokenize(input);
         var expr = Parser.Parse(tokens, env);
-        if (tokens.Count > 0)
-            throw new FormatException("Unexpected tokens after expression.");
+        CheckNoTrailingTokens(tokens);
         var result = Reducer.Reduce(expr, env, null, maxSteps);
         Cwl($"  Result : {result}", ConsoleColor.DarkGray);
         var n = ChurchNat.Decode(result, env, maxSteps);
@@ -409,8 +411,7 @@ static void BoolLine(string input, Dictionary<string, Expr> env, int maxSteps)
     {
         var tokens = Lexer.Tokenize(input);
         var expr = Parser.Parse(tokens, env);
-        if (tokens.Count > 0)
-            throw new FormatException("Unexpected tokens after expression.");
+        CheckNoTrailingTokens(tokens);
         var result = Reducer.Reduce(expr, env, null, maxSteps);
         Cwl($"  Result : {result}", ConsoleColor.DarkGray);
         var b = ChurchBool.Decode(result, env, maxSteps);
@@ -433,8 +434,7 @@ static void ListLine(string input, Dictionary<string, Expr> env, int maxSteps)
     {
         var tokens = Lexer.Tokenize(input);
         var expr   = Parser.Parse(tokens, env);
-        if (tokens.Count > 0)
-            throw new FormatException("Unexpected tokens after expression.");
+        CheckNoTrailingTokens(tokens);
         var result = Reducer.Reduce(expr, env, null, maxSteps);
         Cwl($"  Result : {result}", ConsoleColor.DarkGray);
         var items = ChurchList.Decode(result, env, maxSteps);
@@ -457,8 +457,7 @@ static void BenchLine(string input, Dictionary<string, Expr> env, int maxSteps)
     {
         var tokens = Lexer.Tokenize(input);
         var expr = Parser.Parse(tokens, env);
-        if (tokens.Count > 0)
-            throw new FormatException("Unexpected tokens after expression.");
+        CheckNoTrailingTokens(tokens);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var (result, steps) = Reducer.ReduceWithCount(expr, env, maxSteps);
         sw.Stop();
@@ -491,6 +490,18 @@ static void SaveEnv(string path, Dictionary<string, Expr> env)
 static bool IsIdent(string s) =>
     s.Length > 0 && char.IsLetter(s[0]) &&
     s.All(c => char.IsLetterOrDigit(c) || c == '_');
+
+/// <summary>Throws if any tokens remain after an expression was fully parsed.</summary>
+static void CheckNoTrailingTokens(Queue<Token> tokens)
+{
+    if (tokens.Count > 0)
+    {
+        var t = tokens.Peek();
+        throw new FormatException(
+            $"Unexpected '{t.Value}' at column {t.Position + 1} after expression" +
+            " — to apply multiple terms use parentheses: '(f x)', not 'f x'.");
+    }
+}
 
 /// <summary>After a successful reduction, attempts to decode the result as a Church
 /// boolean, numeral, or list and prints a Hint line for each that matches.</summary>
@@ -598,7 +609,12 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent, int
                     var bodyTokens = Lexer.Tokenize(bodyPart);
                     var body       = Parser.Parse(bodyTokens, env);
                     if (bodyTokens.Count > 0)
-                        throw new FormatException("Unexpected tokens after definition body.");
+                    {
+                        var extra = bodyTokens.Peek();
+                        throw new FormatException(
+                            $"Unexpected '{extra.Value}' at column {extra.Position + 1} in definition body" +
+                            " — did you forget '(' around a multi-term expression?");
+                    }
                     var fullBody = parms.Length > 0
                         ? BracketAbstract.AbstractAll(parms, body)
                         : body;
@@ -760,10 +776,16 @@ namespace SKI
 
     static class Parser
     {
+        // Returns a short description of the next token (or end-of-input) for use in error messages.
+        private static string Describe(Queue<Token> tokens)
+            => tokens.Count == 0
+                ? "end of input"
+                : $"'{tokens.Peek().Value}' at column {tokens.Peek().Position + 1}";
+
         public static Expr Parse(Queue<Token> tokens, Dictionary<string, Expr> env)
         {
             if (tokens.Count == 0)
-                throw new FormatException("Unexpected end of input.");
+                throw new FormatException("Unexpected end of input — an expression was expected here.");
 
             var tok = tokens.Dequeue();
 
@@ -773,11 +795,14 @@ namespace SKI
                                         ? Combinators.FromName(tok.Value)
                                         : (Expr)new NameRef(tok.Value),
                 TokenKind.LParen  => ParseApp(tokens, env, tok.Position),
-                TokenKind.RParen  => throw new FormatException($"Unexpected ')' at column {tok.Position + 1}."),
-                TokenKind.Lambda  => ParseLambda(tokens, env),
+                TokenKind.RParen  => throw new FormatException($"Unmatched ')' at column {tok.Position + 1} — no '(' was opened here."),
+                TokenKind.Lambda  => ParseLambda(tokens, env, tok.Position),
                 TokenKind.Number  => BuildChurchNumeral(int.Parse(tok.Value)),
                 TokenKind.Let     => ParseLet(tokens, env, tok.Position),
                 TokenKind.Letrec  => ParseLetRec(tokens, env, tok.Position),
+                TokenKind.Eq      => throw new FormatException($"Unexpected '=' at column {tok.Position + 1} — definitions must be at the top level, e.g. 'F = expr'."),
+                TokenKind.In      => throw new FormatException($"Unexpected 'in' at column {tok.Position + 1} — 'in' is only valid inside 'let name = expr in body'."),
+                TokenKind.Dot     => throw new FormatException($"Unexpected '.' at column {tok.Position + 1} — use '\\x. body' for lambda."),
                 _ => throw new FormatException($"Unexpected token '{tok.Value}' at column {tok.Position + 1}.")
             };
         }
@@ -788,20 +813,22 @@ namespace SKI
             // additional arguments until ')' — left-associative: (f a b c) = (((f a) b) c).
             var result = Parse(tokens, env);
 
-            if (tokens.Count == 0 || tokens.Peek().Kind == TokenKind.RParen)
-                throw new FormatException($"Application requires at least one argument (column {openParenPos + 1}).");
+            if (tokens.Count > 0 && tokens.Peek().Kind == TokenKind.RParen)
+                throw new FormatException(
+                    $"'(' at column {openParenPos + 1} contains only one term —" +
+                    " application needs at least two: write '(f x)' to apply f to x, or just 'f' without parens.");
 
             while (tokens.Count > 0 && tokens.Peek().Kind != TokenKind.RParen)
                 result = new App(result, Parse(tokens, env));
 
             if (tokens.Count == 0)
-                throw new FormatException($"Expected ')' to close '(' at column {openParenPos + 1}.");
+                throw new FormatException($"Expected ')' to close '(' at column {openParenPos + 1}, but reached end of input.");
             tokens.Dequeue(); // consume ')'
 
             return result;
         }
 
-        private static Expr ParseLambda(Queue<Token> tokens, Dictionary<string, Expr> env)
+        private static Expr ParseLambda(Queue<Token> tokens, Dictionary<string, Expr> env, int lambdaPos)
         {
             // Collect parameter names until a Dot token.
             var parms = new List<string>();
@@ -809,13 +836,15 @@ namespace SKI
             {
                 var p = tokens.Dequeue();
                 if (Combinators.IsBuiltin(p.Value))
-                    throw new FormatException($"Cannot use built-in '{p.Value}' as a lambda parameter.");
+                    throw new FormatException($"Cannot use built-in '{p.Value}' as a lambda parameter (column {p.Position + 1}).");
                 parms.Add(p.Value);
             }
             if (parms.Count == 0)
-                throw new FormatException("Lambda requires at least one parameter name before '.'.");
+                throw new FormatException(
+                    $"Lambda '\\' at column {lambdaPos + 1} requires at least one parameter name before '.' but found {Describe(tokens)} — write '\\x. body'.");
             if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.Dot)
-                throw new FormatException("Expected '.' after lambda parameters.");
+                throw new FormatException(
+                    $"Expected '.' after lambda parameter(s) but found {Describe(tokens)} — write '\\{string.Join(" ", parms)}. body'.");
             tokens.Dequeue(); // consume '.'
             var body = Parse(tokens, env);
             return BracketAbstract.AbstractAll(parms, body);
@@ -827,10 +856,11 @@ namespace SKI
         {
             // Collect binder name
             if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.Ident)
-                throw new FormatException($"Expected name after 'let' (column {letPos + 1}).");
+                throw new FormatException(
+                    $"Expected a name after 'let' at column {letPos + 1} but found {Describe(tokens)} — write 'let name = expr in body'.");
             var name = tokens.Dequeue().Value;
             if (Combinators.IsBuiltin(name))
-                throw new FormatException($"Cannot use built-in '{name}' as a let binder.");
+                throw new FormatException($"Cannot use built-in '{name}' as a let binder — choose a different name.");
 
             // Optional parameters: let f x y = ...
             var parms = new List<string>();
@@ -838,13 +868,14 @@ namespace SKI
             {
                 var p = tokens.Dequeue();
                 if (Combinators.IsBuiltin(p.Value))
-                    throw new FormatException($"Cannot use built-in '{p.Value}' as a parameter.");
+                    throw new FormatException($"Cannot use built-in '{p.Value}' as a parameter name (column {p.Position + 1}).");
                 parms.Add(p.Value);
             }
 
             // Consume '='
             if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.Eq)
-                throw new FormatException($"Expected '=' in let binding (near column {letPos + 1}).");
+                throw new FormatException(
+                    $"Expected '=' after 'let {name}' but found {Describe(tokens)} — write 'let {name} = expr in body'.");
             tokens.Dequeue();
 
             // Parse bound expression
@@ -853,7 +884,8 @@ namespace SKI
 
             // Consume 'in'
             if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.In)
-                throw new FormatException($"Expected 'in' after let binding (near column {letPos + 1}).");
+                throw new FormatException(
+                    $"Expected 'in' after 'let {name} = ...' but found {Describe(tokens)} — write 'let {name} = expr in body'.");
             tokens.Dequeue();
 
             // Parse body
@@ -870,22 +902,24 @@ namespace SKI
         private static Expr ParseLetRec(Queue<Token> tokens, Dictionary<string, Expr> env, int letrecPos)
         {
             if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.Ident)
-                throw new FormatException($"Expected name after 'letrec' (column {letrecPos + 1}).");
+                throw new FormatException(
+                    $"Expected a name after 'letrec' at column {letrecPos + 1} but found {Describe(tokens)} — write 'letrec f x = body in expr'.");
             var name = tokens.Dequeue().Value;
             if (Combinators.IsBuiltin(name))
-                throw new FormatException($"Cannot use built-in '{name}' as a letrec binder.");
+                throw new FormatException($"Cannot use built-in '{name}' as a letrec binder — choose a different name.");
 
             var parms = new List<string>();
             while (tokens.Count > 0 && tokens.Peek().Kind == TokenKind.Ident)
             {
                 var p = tokens.Dequeue();
                 if (Combinators.IsBuiltin(p.Value))
-                    throw new FormatException($"Cannot use built-in '{p.Value}' as a parameter.");
+                    throw new FormatException($"Cannot use built-in '{p.Value}' as a parameter name (column {p.Position + 1}).");
                 parms.Add(p.Value);
             }
 
             if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.Eq)
-                throw new FormatException($"Expected '=' in letrec binding (near column {letrecPos + 1}).");
+                throw new FormatException(
+                    $"Expected '=' after 'letrec {name}' but found {Describe(tokens)} — write 'letrec {name} x = body in expr'.");
             tokens.Dequeue();
 
             var e1Raw = Parse(tokens, env);
@@ -897,7 +931,8 @@ namespace SKI
             var yE1 = new App(Combinators.Y, e1);
 
             if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.In)
-                throw new FormatException($"Expected 'in' after letrec binding (near column {letrecPos + 1}).");
+                throw new FormatException(
+                    $"Expected 'in' after 'letrec {name} = ...' but found {Describe(tokens)} — write 'letrec {name} x = body in expr'.");
             tokens.Dequeue();
 
             var e2     = Parse(tokens, env);
