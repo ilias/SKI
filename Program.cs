@@ -26,6 +26,8 @@
 // Run with: dotnet run -- "(((S K) K) I)"
 // Or interactively with no arguments.
 
+using System.Diagnostics;
+using System.Text;
 using SKI;
 using SysReadLine = System.ReadLine;
 
@@ -60,7 +62,7 @@ else
             continue;
 
         // Multi-line continuation: a line ending with '\' is joined with the next.
-        var sb = new System.Text.StringBuilder(rawLine.TrimEnd());
+        var sb = new StringBuilder(rawLine.TrimEnd());
         while (sb.Length > 0 && sb[^1] == '\\')
         {
             sb.Remove(sb.Length - 1, 1);
@@ -319,7 +321,7 @@ static void RunLine(string input, Dictionary<string, Expr> env, bool trace, int 
                       && !input.TrimStart().Equals("letrec", StringComparison.OrdinalIgnoreCase))
         {
             var lhsParts = input[..eqIdx].Trim()
-                .Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
             if (lhsParts.Length > 0 && lhsParts.All(IsIdent))
             {
                 var name  = lhsParts[0];
@@ -463,7 +465,7 @@ static void BenchLine(string input, Dictionary<string, Expr> env, int maxSteps)
         var tokens = Lexer.Tokenize(input);
         var expr = Parser.Parse(tokens, env);
         CheckNoTrailingTokens(tokens);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var sw = Stopwatch.StartNew();
         var (result, steps) = Reducer.ReduceWithCount(expr, env, maxSteps);
         sw.Stop();
         Cwl($"  Result : {result}", ConsoleColor.Cyan);
@@ -601,7 +603,7 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent, int
                           && !line.Equals("letrec", StringComparison.OrdinalIgnoreCase))
             {
                 var lhsParts = line[..eqIdx].Trim()
-                    .Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
                 if (lhsParts.Length > 0 && lhsParts.All(IsIdent))
                 {
                     var name  = lhsParts[0];
@@ -648,7 +650,8 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent, int
 static string? FindInitFile()
 {
     var exeDir = Path.GetDirectoryName(Environment.ProcessPath ?? string.Empty) ?? string.Empty;
-    foreach (var candidate in new[] { Path.Combine(exeDir, "init.ski"), "init.ski" })
+    string[] candidates = [Path.Combine(exeDir, "init.ski"), "init.ski"];
+    foreach (var candidate in candidates)
         if (File.Exists(candidate)) return candidate;
     return null;
 }
@@ -931,8 +934,7 @@ namespace SKI
             var e1Raw = Parse(tokens, env);
 
             // Build \name parms. body  then wrap in Y
-            var allParms = new List<string>(parms.Count + 1) { name };
-            allParms.AddRange(parms);
+            List<string> allParms = [name, ..parms];
             var e1  = BracketAbstract.AbstractAll(allParms, e1Raw);
             var yE1 = new App(Combinators.Y, e1);
 
@@ -1492,22 +1494,20 @@ namespace SKI
     // ── Colored console writer ────────────────────────────────────────────────
 
     /// <summary>A TextWriter that prints each line to the console in a given color.</summary>
-    sealed class ColorWriter : TextWriter
+    sealed class ColorWriter(ConsoleColor color) : TextWriter
     {
-        private readonly ConsoleColor _color;
-        public ColorWriter(ConsoleColor color) => _color = color;
-        public override System.Text.Encoding Encoding => Console.Out.Encoding;
+        public override Encoding Encoding => Console.Out.Encoding;
 
         public override void WriteLine(string? value)
         {
-            Console.ForegroundColor = _color;
+            Console.ForegroundColor = color;
             Console.WriteLine(value);
             Console.ResetColor();
         }
 
         public override void Write(string? value)
         {
-            Console.ForegroundColor = _color;
+            Console.ForegroundColor = color;
             Console.Write(value);
             Console.ResetColor();
         }
@@ -1522,7 +1522,7 @@ namespace SKI
     ///   - REPL commands  :load :save :env :def :undef :expand :nat :bool :list
     ///                    :bench :trace :set :reset :reload :help
     /// </summary>
-    sealed class SkiAutoComplete : IAutoCompleteHandler
+    sealed class SkiAutoComplete(Func<Dictionary<string, Expr>> getEnv) : IAutoCompleteHandler
     {
         private static readonly string[] Commands =
         [
@@ -1534,17 +1534,13 @@ namespace SKI
 
         private static readonly string[] Builtins = ["S", "K", "I", "B", "C", "W", "Y", "M", "T"];
 
-        private readonly Func<Dictionary<string, Expr>> _getEnv;
-
-        public SkiAutoComplete(Func<Dictionary<string, Expr>> getEnv) => _getEnv = getEnv;
-
         public char[] Separators { get; set; } = [' ', '(', ')'];
 
         public string[] GetSuggestions(string text, int index)
         {
             // Find the word being completed (token starting at 'index')
             var word = text[index..];
-            var env = _getEnv();
+            var env = getEnv();
 
             IEnumerable<string> candidates = word.StartsWith(':')
                 ? Commands
