@@ -1,8 +1,0 @@
-# testlib.ski - Helper definitions imported by test.ski section 17.
-# Used to verify the 'import <path>' directive in .ski files.
-
-# DOUBLE_NAT n = 2 * n
-DOUBLE_NAT = (MUL 2)
-
-# TRIPLE_NAT n = 3 * n
-TRIPLE_NAT = (MUL 3)
