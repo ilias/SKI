@@ -1,5 +1,0 @@
-# testlib.ski  — helper definitions used by the test suite (section 17)
-# Imported via: import testlib.ski
-
-DOUBLE_NAT = (MUL 2)     # DOUBLE_NAT n = 2 * n
-TRIPLE_NAT = (MUL 3)     # TRIPLE_NAT n = 3 * n

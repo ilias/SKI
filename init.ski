@@ -220,3 +220,36 @@ SINGLETON = ((C CONS) NIL)
 #   Abstracting r:  F   = B (S (S ISNIL (K ZERO))) (B (B SUCC) (C B TAIL))
 # Note: (S ((S ISNIL) (K ZERO))) = S applied to the 2-arg partial (S ISNIL (K ZERO))
 LENGTH  = (Y ((B (S ((S ISNIL) (K ZERO)))) ((B (B SUCC)) ((C B) TAIL))))
+
+# ============================================================================
+# RECURSIVE NUMERIC FUNCTIONS
+# ============================================================================
+
+# FACT n = n!   (0! = 1,  n! = n * (n-1)!)
+# FACTF f n = (ISZERO n) ONE (MUL n (f (PRED n)))
+FACTF f n = (((ISZERO n) ONE) ((MUL n) (f (PRED n))))
+FACT    = (Y FACTF)
+
+# FIB n = nth Fibonacci number  (FIB 0 = 0,  FIB 1 = 1,  FIB n = FIB(n-1) + FIB(n-2))
+# FIBF f n = (ISZERO n) ZERO ((ISZERO (PRED n)) ONE (ADD (f (PRED n)) (f (PRED (PRED n)))))
+FIBF f n = (((ISZERO n) ZERO) (((ISZERO (PRED n)) ONE) ((ADD (f (PRED n))) (f (PRED (PRED n))))))
+FIB     = (Y FIBF)
+# GCD m n = greatest common divisor  (Euclidean algorithm: GCD m 0 = m, GCD m n = GCD n (MOD m n))
+# GCDF rec m n = (ISZERO n) m (rec n (MOD m n))
+GCDF rec m n = (((ISZERO n) m) ((rec n) ((MOD m) n)))
+GCD     = (Y GCDF)
+
+# LCM m n = least common multiple = m * n / GCD m n
+LCM m n = ((DIV ((MUL m) n)) ((GCD m) n))
+
+# TRI n = 1 + 2 + ... + n = n*(n+1)/2  (nth triangular number, closed-form)
+TRI n = ((DIV ((MUL n) (SUCC n))) TWO)
+
+# SQ n = n²   (W MUL: W f x = f x x, so W MUL n = MUL n n)
+SQ      = (W MUL)
+
+# CUBE n = n³  (S MUL (W MUL): n → MUL n (MUL n n))
+CUBE    = ((S MUL) (W MUL))
+
+# DIST m n = |m − n|  (absolute difference; one SUB always gives ZERO so ADD is safe)
+DIST m n = ((ADD ((SUB m) n)) ((SUB n) m))

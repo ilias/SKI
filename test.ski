@@ -638,3 +638,112 @@ letrec count n = ((ISZERO n) ZERO (SUCC (count (PRED n)))) in (count THREE)
 
 # Nested let + letrec: 3^2 = 9  [hint: Nat 9]
 let base = THREE in letrec pow n = ((ISZERO n) ONE ((MUL base) (pow (PRED n)))) in (pow TWO)
+
+# ============================================================================
+# 21. RECURSIVE NUMERIC FUNCTIONS  (GCD, LCM, TRI, SQ, CUBE, DIST)
+# ============================================================================
+
+# --- GCD (greatest common divisor, Euclidean algorithm) ---
+
+# GCD n n = n  (equal args)
+((((EQ ((GCD SIX) SIX)) SIX) S) K)
+
+# GCD 6 4 = 2
+((((EQ ((GCD SIX) FOUR)) TWO) S) K)
+
+# GCD 10 6 = 2
+((((EQ ((GCD TEN) SIX)) TWO) S) K)
+
+# GCD 9 6 = 3
+((((EQ ((GCD NINE) SIX)) THREE) S) K)
+
+# GCD 7 5 = 1  (coprime)
+((((EQ ((GCD SEVEN) FIVE)) ONE) S) K)
+
+# GCD n 0 = n  (zero is identity)
+((((EQ ((GCD FIVE) ZERO)) FIVE) S) K)
+
+# GCD commutes: GCD 4 6 = GCD 6 4 = 2
+((((EQ ((GCD FOUR) SIX)) ((GCD SIX) FOUR)) S) K)
+
+# --- LCM (least common multiple) ---
+
+# LCM 4 6 = 12
+((((EQ ((LCM FOUR) SIX)) ((MUL TWO) SIX)) S) K)
+
+# LCM 3 5 = 15  (coprime: lcm = product)
+((((EQ ((LCM THREE) FIVE)) ((MUL THREE) FIVE)) S) K)
+
+# LCM 6 4 = 12  (commutative)
+((((EQ ((LCM SIX) FOUR)) ((LCM FOUR) SIX)) S) K)
+
+# LCM 1 n = n
+((((EQ ((LCM ONE) SEVEN)) SEVEN) S) K)
+
+# --- TRI (triangular numbers: TRI n = 1+2+...+n) ---
+
+# TRI 0 = 0
+((((EQ (TRI ZERO)) ZERO) S) K)
+
+# TRI 1 = 1
+((((EQ (TRI ONE)) ONE) S) K)
+
+# TRI 3 = 6
+((((EQ (TRI THREE)) SIX) S) K)
+
+# TRI 4 = 10
+((((EQ (TRI FOUR)) TEN) S) K)
+
+# TRI 5 = 15
+((((EQ (TRI FIVE)) ((ADD TEN) FIVE)) S) K)
+
+# --- SQ (square: SQ n = n*n) ---
+
+# SQ 0 = 0
+((((EQ (SQ ZERO)) ZERO) S) K)
+
+# SQ 1 = 1
+((((EQ (SQ ONE)) ONE) S) K)
+
+# SQ 3 = 9
+((((EQ (SQ THREE)) NINE) S) K)
+
+# SQ 4 = 16
+((((EQ (SQ FOUR)) ((MUL FOUR) FOUR)) S) K)
+
+# SQ n = MUL n n
+((((EQ (SQ FIVE)) ((MUL FIVE) FIVE)) S) K)
+
+# --- CUBE (cube: CUBE n = n*n*n) ---
+
+# CUBE 0 = 0
+((((EQ (CUBE ZERO)) ZERO) S) K)
+
+# CUBE 1 = 1
+((((EQ (CUBE ONE)) ONE) S) K)
+
+# CUBE 2 = 8
+((((EQ (CUBE TWO)) EIGHT) S) K)
+
+# CUBE 3 = 27
+((((EQ (CUBE THREE)) ((MUL NINE) THREE)) S) K)
+
+# CUBE n = MUL (SQ n) n
+((((EQ (CUBE FOUR)) ((MUL (SQ FOUR)) FOUR)) S) K)
+
+# --- DIST (absolute difference: DIST m n = |m - n|) ---
+
+# DIST n n = 0
+((((EQ ((DIST FOUR) FOUR)) ZERO) S) K)
+
+# DIST 5 3 = 2
+((((EQ ((DIST FIVE) THREE)) TWO) S) K)
+
+# DIST 3 5 = 2  (symmetric)
+((((EQ ((DIST THREE) FIVE)) TWO) S) K)
+
+# DIST commutes: DIST m n = DIST n m
+((((EQ ((DIST SEVEN) TWO)) ((DIST TWO) SEVEN)) S) K)
+
+# DIST n 0 = n
+((((EQ ((DIST SIX) ZERO)) SIX) S) K)
