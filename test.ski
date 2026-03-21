@@ -747,3 +747,115 @@ let base = THREE in letrec pow n = ((ISZERO n) ONE ((MUL base) (pow (PRED n)))) 
 
 # DIST n 0 = n
 ((((EQ ((DIST SIX) ZERO)) SIX) S) K)
+
+# ============================================================================
+# 22. CHURCH LIST HIGHER-ORDER FUNCTIONS
+#     MAP / FOLDR / FOLDL / FILTER / APPEND / REVERSE / ZIP
+# ============================================================================
+
+# Helper lists used throughout:
+#   L123 = [ONE, TWO, THREE]
+#   L12  = [ONE, TWO]
+#   L34  = [THREE, FOUR]
+#   L013 = [ZERO, ONE, TWO, THREE]
+
+# ----- MAP -----
+
+# MAP SUCC [ONE, TWO, THREE]: length = 3
+((((EQ (LENGTH ((MAP SUCC) ((CONS ONE) ((CONS TWO) ((CONS THREE) NIL)))))) THREE) S) K)
+
+# MAP SUCC [ONE, TWO]: HEAD = TWO
+((((EQ (HEAD ((MAP SUCC) ((CONS ONE) ((CONS TWO) NIL))))) TWO) S) K)
+
+# MAP SUCC [ONE, TWO]: HEAD TAIL = THREE
+((((EQ (HEAD (TAIL ((MAP SUCC) ((CONS ONE) ((CONS TWO) NIL)))))) THREE) S) K)
+
+# MAP over NIL = NIL  (length 0)
+((((EQ (LENGTH ((MAP SUCC) NIL))) ZERO) S) K)
+
+# ----- FOLDR -----
+
+# FOLDR ADD ZERO [ONE, TWO, THREE] = SIX  (1+2+3)
+((((EQ (((FOLDR ADD) ZERO) ((CONS ONE) ((CONS TWO) ((CONS THREE) NIL))))) SIX) S) K)
+
+# FOLDR ADD ZERO NIL = ZERO  (base case)
+((((EQ (((FOLDR ADD) ZERO) NIL)) ZERO) S) K)
+
+# FOLDR MUL ONE [TWO, THREE] = SIX  (2*3)
+((((EQ (((FOLDR MUL) ONE) ((CONS TWO) ((CONS THREE) NIL)))) SIX) S) K)
+
+# ----- FOLDL -----
+
+# FOLDL ADD ZERO [ONE, TWO, THREE] = SIX
+((((EQ (((FOLDL ADD) ZERO) ((CONS ONE) ((CONS TWO) ((CONS THREE) NIL))))) SIX) S) K)
+
+# FOLDL ADD ZERO NIL = ZERO  (base case)
+((((EQ (((FOLDL ADD) ZERO) NIL)) ZERO) S) K)
+
+# FOLDL (FLIP CONS) NIL [ONE, TWO, THREE]: HEAD = THREE  (left-fold reversal)
+((((EQ (HEAD (((FOLDL (FLIP CONS)) NIL) ((CONS ONE) ((CONS TWO) ((CONS THREE) NIL)))))) THREE) S) K)
+
+# ----- FILTER -----
+
+# FILTER EVEN [ZERO, ONE, TWO, THREE] = [ZERO, TWO]: length 2
+((((EQ (LENGTH ((FILTER EVEN) ((CONS ZERO) ((CONS ONE) ((CONS TWO) ((CONS THREE) NIL))))))) TWO) S) K)
+
+# HEAD of even-filtered list = ZERO
+((((EQ (HEAD ((FILTER EVEN) ((CONS ZERO) ((CONS ONE) ((CONS TWO) ((CONS THREE) NIL))))))) ZERO) S) K)
+
+# HEAD TAIL of even-filtered list = TWO
+((((EQ (HEAD (TAIL ((FILTER EVEN) ((CONS ZERO) ((CONS ONE) ((CONS TWO) ((CONS THREE) NIL)))))))) TWO) S) K)
+
+# FILTER ODD [ZERO, ONE, TWO] = [ONE]: length 1
+((((EQ (LENGTH ((FILTER ODD) ((CONS ZERO) ((CONS ONE) ((CONS TWO) NIL)))))) ONE) S) K)
+
+# FILTER on NIL = NIL
+((((EQ (LENGTH ((FILTER EVEN) NIL))) ZERO) S) K)
+
+# ----- APPEND -----
+
+# APPEND [ONE, TWO] [THREE]: length 3
+((((EQ (LENGTH ((APPEND ((CONS ONE) ((CONS TWO) NIL))) ((CONS THREE) NIL)))) THREE) S) K)
+
+# HEAD of appended list = ONE
+((((EQ (HEAD ((APPEND ((CONS ONE) ((CONS TWO) NIL))) ((CONS THREE) NIL)))) ONE) S) K)
+
+# HEAD TAIL TAIL of appended list = THREE
+((((EQ (HEAD (TAIL (TAIL ((APPEND ((CONS ONE) ((CONS TWO) NIL))) ((CONS THREE) NIL)))))) THREE) S) K)
+
+# APPEND NIL l = l  (left identity: length preserved)
+((((EQ (LENGTH ((APPEND NIL) ((CONS ONE) ((CONS TWO) NIL))))) TWO) S) K)
+
+# APPEND l NIL = l  (right identity: length preserved)
+((((EQ (LENGTH ((APPEND ((CONS ONE) ((CONS TWO) NIL))) NIL))) TWO) S) K)
+
+# ----- REVERSE -----
+
+# REVERSE [ONE, TWO, THREE]: HEAD = THREE
+((((EQ (HEAD (REVERSE ((CONS ONE) ((CONS TWO) ((CONS THREE) NIL)))))) THREE) S) K)
+
+# REVERSE [ONE, TWO, THREE]: HEAD TAIL = TWO
+((((EQ (HEAD (TAIL (REVERSE ((CONS ONE) ((CONS TWO) ((CONS THREE) NIL))))))) TWO) S) K)
+
+# REVERSE preserves length
+((((EQ (LENGTH (REVERSE ((CONS ONE) ((CONS TWO) ((CONS THREE) NIL)))))) THREE) S) K)
+
+# REVERSE (REVERSE l) = l: HEAD = ONE
+((((EQ (HEAD (REVERSE (REVERSE ((CONS ONE) ((CONS TWO) ((CONS THREE) NIL))))))) ONE) S) K)
+
+# ----- ZIP -----
+
+# ZIP [ONE, TWO] [THREE, FOUR]: length 2
+((((EQ (LENGTH ((ZIP ((CONS ONE) ((CONS TWO) NIL))) ((CONS THREE) ((CONS FOUR) NIL))))) TWO) S) K)
+
+# FST of HEAD of zipped list = ONE
+((((EQ (FST (HEAD ((ZIP ((CONS ONE) ((CONS TWO) NIL))) ((CONS THREE) ((CONS FOUR) NIL)))))) ONE) S) K)
+
+# SND of HEAD of zipped list = THREE
+((((EQ (SND (HEAD ((ZIP ((CONS ONE) ((CONS TWO) NIL))) ((CONS THREE) ((CONS FOUR) NIL)))))) THREE) S) K)
+
+# ZIP stops at the shorter list: ZIP [ONE] [TWO, THREE] = length 1
+((((EQ (LENGTH ((ZIP ((CONS ONE) NIL)) ((CONS TWO) ((CONS THREE) NIL))))) ONE) S) K)
+
+# ZIP NIL l = NIL
+((((EQ (LENGTH ((ZIP NIL) ((CONS ONE) NIL)))) ZERO) S) K)

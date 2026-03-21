@@ -253,3 +253,39 @@ CUBE    = ((S MUL) (W MUL))
 
 # DIST m n = |m − n|  (absolute difference; one SUB always gives ZERO so ADD is safe)
 DIST m n = ((ADD ((SUB m) n)) ((SUB n) m))
+
+# ============================================================================
+# CHURCH LIST HIGHER-ORDER FUNCTIONS
+# ============================================================================
+
+# MAP f l — apply f to every element; MAP f NIL = NIL
+# MAPF rec f l = (ISNIL l) NIL (CONS (f (HEAD l)) (rec f (TAIL l)))
+MAPF rec f l = (((ISNIL l) NIL) ((CONS (f (HEAD l))) ((rec f) (TAIL l))))
+MAP     = (Y MAPF)
+
+# FOLDR f z l — right fold: FOLDR f z NIL = z, FOLDR f z (CONS h t) = f h (FOLDR f z t)
+# FOLDRF rec f z l = (ISNIL l) z (f (HEAD l) (rec f z (TAIL l)))
+FOLDRF rec f z l = (((ISNIL l) z) ((f (HEAD l)) (((rec f) z) (TAIL l))))
+FOLDR   = (Y FOLDRF)
+
+# FOLDL f z l — strict left fold: FOLDL f z NIL = z, FOLDL f z (CONS h t) = FOLDL f (f z h) t
+# FOLDLF rec f z l = (ISNIL l) z (rec f (f z (HEAD l)) (TAIL l))
+FOLDLF rec f z l = (((ISNIL l) z) (((rec f) ((f z) (HEAD l))) (TAIL l)))
+FOLDL   = (Y FOLDLF)
+
+# FILTER p l — keep only elements satisfying predicate p
+# FILTERF rec p l = (ISNIL l) NIL ((p (HEAD l)) (CONS (HEAD l) (rec p (TAIL l))) (rec p (TAIL l)))
+FILTERF rec p l = (((ISNIL l) NIL) (((p (HEAD l)) ((CONS (HEAD l)) ((rec p) (TAIL l)))) ((rec p) (TAIL l))))
+FILTER  = (Y FILTERF)
+
+# APPEND l1 l2 — concatenate two lists; APPEND NIL l = l, APPEND (CONS h t) l = CONS h (APPEND t l)
+APPENDF rec l1 l2 = (((ISNIL l1) l2) ((CONS (HEAD l1)) ((rec (TAIL l1)) l2)))
+APPEND  = (Y APPENDF)
+
+# REVERSE l — reverse a list using a left fold with flipped CONS
+REVERSE = ((FOLDL (FLIP CONS)) NIL)
+
+# ZIP l1 l2 — pair up elements; stops at the shorter list
+# ZIPF rec l1 l2 = (ISNIL l1) NIL ((ISNIL l2) NIL (CONS (PAIR (HEAD l1) (HEAD l2)) (rec (TAIL l1) (TAIL l2))))
+ZIPF rec l1 l2 = (((ISNIL l1) NIL) (((ISNIL l2) NIL) ((CONS ((PAIR (HEAD l1)) (HEAD l2))) ((rec (TAIL l1)) (TAIL l2)))))
+ZIP     = (Y ZIPF)

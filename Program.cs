@@ -42,7 +42,11 @@ if (initPath is not null)
 
 if (args.Length > 0)
 {
-    RunLine(string.Concat(args), env, traceMode, maxSteps);
+    // A single .ski filename argument loads the file rather than evaluating it as an expression.
+    if (args.Length == 1 && args[0].EndsWith(".ski", StringComparison.OrdinalIgnoreCase))
+        LoadFile(args[0], env, silent: false, maxSteps: maxSteps);
+    else
+        RunLine(string.Concat(args), env, traceMode, maxSteps);
 }
 else
 {
@@ -312,47 +316,18 @@ static void RunLine(string input, Dictionary<string, Expr> env, bool trace, int 
 {
     try
     {
-        // Detect   Name = expr   or   Name x y = expr   (parameterized definition).
-        // But NOT let-expressions, which also contain '='.
-        var eqIdx = input.IndexOf('=');
-        if (eqIdx > 0 && !input.TrimStart().StartsWith("let ", StringComparison.OrdinalIgnoreCase)
-                      && !input.TrimStart().Equals("let", StringComparison.OrdinalIgnoreCase)
-                      && !input.TrimStart().StartsWith("letrec ", StringComparison.OrdinalIgnoreCase)
-                      && !input.TrimStart().Equals("letrec", StringComparison.OrdinalIgnoreCase))
+        var def = TryParseDefinition(input, env);
+        if (def is { } d)
         {
-            var lhsParts = input[..eqIdx].Trim()
-                .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
-            if (lhsParts.Length > 0 && lhsParts.All(IsIdent))
-            {
-                var name  = lhsParts[0];
-                var parms = lhsParts[1..];
-                if (Combinators.IsBuiltin(name))
-                    throw new InvalidOperationException($"Cannot redefine built-in combinator '{name}'.");
-                foreach (var p in parms)
-                    if (Combinators.IsBuiltin(p))
-                        throw new FormatException($"Cannot use built-in '{p}' as a parameter name.");
-                var bodyPart   = input[(eqIdx + 1)..].Trim();
-                var bodyTokens = Lexer.Tokenize(bodyPart);
-                var body       = Parser.Parse(bodyTokens, env);
-                if (bodyTokens.Count > 0)
-                {
-                    var extra = bodyTokens.Peek();
-                    throw new FormatException(
-                        $"Unexpected '{extra.Value}' at column {extra.Position + 1} in definition body" +
-                        " — did you forget '(' around a multi-term expression?");
-                }
-                var fullBody = parms.Length > 0
-                    ? BracketAbstract.AbstractAll(parms, body)
-                    : body;
-                if (parms.Length == 0 && Expander.ContainsName(body, name))
-                    Cwl($"  Warning: '{name}' references itself — use Y for recursion", ConsoleColor.Yellow);
-                env[name] = fullBody;
-                if (parms.Length > 0)
-                    Cwl($"  Defined {name} {string.Join(" ", parms)} = {body}  →  {fullBody}", ConsoleColor.DarkGreen);
-                else
-                    Cwl($"  Defined {name} = {fullBody}", ConsoleColor.DarkGreen);
-                return;
-            }
+            var (name, parms, rawBody, fullBody) = d;
+            if (parms.Length == 0 && Expander.ContainsName(rawBody, name))
+                Cwl($"  Warning: '{name}' references itself — use Y for recursion", ConsoleColor.Yellow);
+            env[name] = fullBody;
+            if (parms.Length > 0)
+                Cwl($"  Defined {name} {string.Join(" ", parms)} = {rawBody}  →  {fullBody}", ConsoleColor.DarkGreen);
+            else
+                Cwl($"  Defined {name} = {fullBody}", ConsoleColor.DarkGreen);
+            return;
         }
 
         // Otherwise it's an expression to reduce.
@@ -496,7 +471,7 @@ static void SaveEnv(string path, Dictionary<string, Expr> env)
 }
 
 static bool IsIdent(string s) =>
-    s.Length > 0 && char.IsLetter(s[0]) &&
+    s.Length > 0 && (char.IsLetter(s[0]) || s[0] == '_') &&
     s.All(c => char.IsLetterOrDigit(c) || c == '_');
 
 /// <summary>Throws if any tokens remain after an expression was fully parsed.</summary>
@@ -509,6 +484,47 @@ static void CheckNoTrailingTokens(Queue<Token> tokens)
             $"Unexpected '{t.Value}' at column {t.Position + 1} after expression" +
             " — to apply multiple terms use parentheses: '(f x)', not 'f x'.");
     }
+}
+
+/// <summary>
+/// Tries to parse <paramref name="line"/> as a "Name [param...] = body" definition.
+/// Returns (Name, Parms, RawBody, FullBody) on success, or <see langword="null"/> when the
+/// line is not a definition (e.g. starts with <c>let</c>/<c>letrec</c>, or the LHS contains
+/// non-identifier tokens).  Throws on validation errors such as redefining a built-in.
+/// </summary>
+static (string Name, string[] Parms, Expr RawBody, Expr FullBody)?
+    TryParseDefinition(string line, Dictionary<string, Expr> env)
+{
+    var eqIdx = line.IndexOf('=');
+    if (eqIdx <= 0) return null;
+    var ls = line.TrimStart();
+    if (ls.StartsWith("let ",    StringComparison.OrdinalIgnoreCase) ||
+        ls.Equals(   "let",      StringComparison.OrdinalIgnoreCase) ||
+        ls.StartsWith("letrec ", StringComparison.OrdinalIgnoreCase) ||
+        ls.Equals(   "letrec",   StringComparison.OrdinalIgnoreCase))
+        return null;
+    var lhsParts = line[..eqIdx].Trim()
+        .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+    if (lhsParts.Length == 0 || !lhsParts.All(IsIdent)) return null;
+    var name  = lhsParts[0];
+    var parms = lhsParts[1..];
+    if (Combinators.IsBuiltin(name))
+        throw new InvalidOperationException($"Cannot redefine built-in combinator '{name}'.");
+    foreach (var p in parms)
+        if (Combinators.IsBuiltin(p))
+            throw new FormatException($"Cannot use built-in '{p}' as a parameter name.");
+    var bodyPart   = line[(eqIdx + 1)..].Trim();
+    var bodyTokens = Lexer.Tokenize(bodyPart);
+    var rawBody    = Parser.Parse(bodyTokens, env);
+    if (bodyTokens.Count > 0)
+    {
+        var extra = bodyTokens.Peek();
+        throw new FormatException(
+            $"Unexpected '{extra.Value}' at column {extra.Position + 1} in definition body" +
+            " — did you forget '(' around a multi-term expression?");
+    }
+    var fullBody = parms.Length > 0 ? BracketAbstract.AbstractAll(parms, rawBody) : rawBody;
+    return (name, parms, rawBody, fullBody);
 }
 
 /// <summary>After a successful reduction, attempts to decode the result as a Church
@@ -595,42 +611,14 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent, int
                 continue;
             }
             // Definitions: Name = expr  or  Name x y = expr  (parameterized).
-            // Exclude let-expressions which also contain '='.
-            var eqIdx = line.IndexOf('=');
-            if (eqIdx > 0 && !line.StartsWith("let ", StringComparison.OrdinalIgnoreCase)
-                          && !line.Equals("let", StringComparison.OrdinalIgnoreCase)
-                          && !line.StartsWith("letrec ", StringComparison.OrdinalIgnoreCase)
-                          && !line.Equals("letrec", StringComparison.OrdinalIgnoreCase))
+            var def = TryParseDefinition(line, env);
+            if (def is { } d)
             {
-                var lhsParts = line[..eqIdx].Trim()
-                    .Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
-                if (lhsParts.Length > 0 && lhsParts.All(IsIdent))
-                {
-                    var name  = lhsParts[0];
-                    var parms = lhsParts[1..];
-                    if (Combinators.IsBuiltin(name))
-                        throw new InvalidOperationException($"Cannot redefine built-in combinator '{name}'.");
-                    foreach (var p in parms)
-                        if (Combinators.IsBuiltin(p))
-                            throw new FormatException($"Cannot use built-in '{p}' as a parameter name.");
-                    var bodyPart   = line[(eqIdx + 1)..].Trim();
-                    var bodyTokens = Lexer.Tokenize(bodyPart);
-                    var body       = Parser.Parse(bodyTokens, env);
-                    if (bodyTokens.Count > 0)
-                    {
-                        var extra = bodyTokens.Peek();
-                        throw new FormatException(
-                            $"Unexpected '{extra.Value}' at column {extra.Position + 1} in definition body" +
-                            " — did you forget '(' around a multi-term expression?");
-                    }
-                    var fullBody = parms.Length > 0
-                        ? BracketAbstract.AbstractAll(parms, body)
-                        : body;
-                    env[name] = fullBody;
-                    if (!silent) Cwl($"  Defined {name} = {fullBody}", ConsoleColor.DarkGreen);
-                    defined++;
-                    continue;
-                }
+                var (name, _, _, fullBody) = d;
+                env[name] = fullBody;
+                if (!silent) Cwl($"  Defined {name} = {fullBody}", ConsoleColor.DarkGreen);
+                defined++;
+                continue;
             }
             // Non-definition lines in a file: evaluate and print.
             RunLine(line, env, false, maxSteps);
@@ -1156,14 +1144,17 @@ namespace SKI
 
     static class Graph
     {
-        // Pool of cached atom nodes (one per combinator letter)
-        private static readonly Dictionary<char, GNode> AtomPool = new();
+        // Pool of cached atom nodes indexed by char value (all used chars are within BMP and < 256).
+        private static readonly GNode?[] AtomPool = new GNode?[256];
 
         public static GNode Atom(char c)
         {
-            if (!AtomPool.TryGetValue(c, out var n))
-                AtomPool[c] = n = GNode.MakeAtom(c);
-            return n;
+            if (c < 256)
+            {
+                ref var slot = ref AtomPool[c];
+                return slot ??= GNode.MakeAtom(c);
+            }
+            return GNode.MakeAtom(c);
         }
 
         /// <summary>Convert an immutable <see cref="Expr"/> tree to a mutable graph.
