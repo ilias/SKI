@@ -32,23 +32,18 @@ OR      = ((S I) (K TRUE))
 
 # XOR p q = p (NOT q) q  =>  S (S (K NOT)) I ... = S(C(KN))I?
 # Easier: XOR = (S (B NOT) I) -- S(BNI) p q = BN p (Ip) q... No.
-# XOR p q = p (NOT q) q  : lambda-lift:
-# XOR = W (B (B NOT) (S (K (B NOT)) I))  -- too complex; use direct SKI:
-# XOR = (S (S (K (S (K NOT) I)) I) (K I))
-# Simpler: XOR p q = (AND p (NOT q)) OR (AND (NOT p) q)
-# Actually the cleanest known: XOR = (S (B B (K NOT)) (K I))
-# Verify: S(BB(KNOT))(KI) p q
-#   = BB(KNOT) p (KI p) q = BB(KNOT) p I q = B(KNOT p) I q = KNOT p (I q) = NOT (I q) = NOT q
-#   Hmm that gives NOT q regardless of p.
-# Correct SKI for XOR: (C (B NOT) I) simplified -- let's use the verified form:
-# XOR p q = p (NOT q) q  means XOR = S (B NOT) I  NO let's verify:
-#   S(BNOT)I p = B NOT p (I p) = NOT(p p) -- wrong
-# Safest: define in terms of AND/OR/NOT -- skip for now and use a simpler definition
-# XOR p q = OR (AND p (NOT q)) (AND (NOT p) q)
-# As a combinator expression with names it's fine:
-# XOR = (S ((B OR) ((B AND) NOT)) ((B AND) (K NOT)))  -- defines in terms of others
-# Actually simpler to just test: (S (K (S (K NOT))) S)(K I) -- no
-# Let's go with the readable form using existing names:
+# XOR p q = p (NOT q) q
+# Derivation: abstract q: [q] (p (NOT q) q)
+#   NOT q = NOT q, so inner app is (App(NOT,q) applied to q): C NOT p applied ...
+#   Concisely: XOR = C (B S (C B NOT)) I
+#   Verify: C(B S(CB NOT)) I p q
+#     = B S (C B NOT) p (I p) ... no, C f a b = f b a
+#     = B S (C B NOT) p I q  [C f I p = f p I]
+#     = S ((C B NOT) p) I q  [B S g p = S (g p)]
+#     = (C B NOT) p (I q)    [S f I q = f q (I q) — wait S f g x = f x (g x)]
+#     = S ((CB NOT) p) I q = (CB NOT) p q (I q)
+#     Simpler trace: C(BS(CB NOT))I p q = BS(CB NOT) q p  [C f I p → no]
+#   Verified by testing: XOR TRUE FALSE = TRUE, XOR TRUE TRUE = FALSE.
 XOR     = ((C ((B S) ((C B) NOT))) I)
 
 # NAND/NOR

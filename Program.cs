@@ -274,7 +274,7 @@ else
 
 static void PrintHelp(string? initPath)
 {
-    Console.WriteLine("SKI(BCWY) Combinator Interpreter");
+    Console.WriteLine("SKI(BCWYMT) Combinator Interpreter");
     Console.WriteLine("Syntax : (f a b c) = left-assoc application  |  (f a) = binary");
     Console.WriteLine("Lambda : \\x y. body  compiled to SKI via bracket abstraction");
     Console.WriteLine("Let    : let x = e1 in e2  local binding (sugar for (\\x. e2) e1)");
@@ -682,13 +682,17 @@ namespace SKI
     {
         public sealed override string ToString() => Print(this);
 
-        private static string Print(Expr e) => e switch
+        private static string Print(Expr e)
         {
-            Combinator c    => c.Name.ToString(),
-            NameRef nr      => nr.Name,
-            App(var f, var x) => $"({Print(f)} {Print(x)})",
-            _ => "?"
-        };
+            if (e is Combinator c) return c.Name.ToString();
+            if (e is NameRef nr)   return nr.Name;
+            // Flatten left-associative chains: (((f a) b) c)  →  (f a b c)
+            var args = new List<string>();
+            while (e is App(var f, var a)) { args.Add(Print(a)); e = f; }
+            args.Add(Print(e));
+            args.Reverse();
+            return $"({string.Join(" ", args)})";
+        }
     }
 
     record Combinator(char Name) : Expr;
@@ -1020,18 +1024,31 @@ namespace SKI
 
                 // B: [x] (f a)  →  B f ([x] a)   when x ∉ fv(f)
                 if (!IsFree(x, f))
-                    return new App(new App(Combinators.B, f), Abstract(x, a));
+                    return Simplify(new App(new App(Combinators.B, f), Abstract(x, a)));
 
                 // C: [x] (f a)  →  C ([x] f) a   when x ∉ fv(a)
                 if (!IsFree(x, a))
-                    return new App(new App(Combinators.C, Abstract(x, f)), a);
+                    return Simplify(new App(new App(Combinators.C, Abstract(x, f)), a));
 
                 // S: [x] (f a)  →  S ([x] f) ([x] a)
-                return new App(new App(Combinators.S, Abstract(x, f)), Abstract(x, a));
+                return Simplify(new App(new App(Combinators.S, Abstract(x, f)), Abstract(x, a)));
             }
 
             return new App(Combinators.K, body); // unreachable
         }
+
+        /// <summary>
+        /// Post-abstraction simplifications that eliminate identity-composition redundancies.
+        /// These patterns arise in multi-parameter abstractions when an inner pass produces I.
+        /// </summary>
+        private static Expr Simplify(Expr e) => e switch
+        {
+            // B f I → f   (f ∘ id = f,  verified: B f I x = f (I x) = f x)
+            App(App(Combinator { Name: 'B' }, var f), Combinator { Name: 'I' }) => f,
+            // S (K f) I → f   (verified: S(Kf)I x = Kf x (Ix) = f (Ix) = f x)
+            App(App(Combinator { Name: 'S' }, App(Combinator { Name: 'K' }, var f)), Combinator { Name: 'I' }) => f,
+            _ => e
+        };
 
         /// <summary>Abstracts multiple params left-to-right: \p0 p1 p2. body = [p0]([p1]([p2] body)).</summary>
         public static Expr AbstractAll(IReadOnlyList<string> parms, Expr body)
