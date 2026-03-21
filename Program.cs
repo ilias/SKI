@@ -19,6 +19,7 @@
 // Integer literals:   0, 1, 42    — converted to Church numerals at parse time
 // Parameterized defs: F x y = body — sugar for  F = \x y. body
 // Let-expressions:    let x = e1 in e2  — sugar for  (\x. e2) e1
+// Letrec-exprs:        letrec f x = body in e2  — recursive local binding (Y-based)
 // Import directive:   import <path>  — inside .ski files, loads another file
 // Run with: dotnet run -- "(((S K) K) I)"
 // Or interactively with no arguments.
@@ -269,6 +270,7 @@ static void PrintHelp(string? initPath)
     Console.WriteLine("Syntax : (f a b c) = left-assoc application  |  (f a) = binary");
     Console.WriteLine("Lambda : \\x y. body  compiled to SKI via bracket abstraction");
     Console.WriteLine("Let    : let x = e1 in e2  local binding (sugar for (\\x. e2) e1)");
+    Console.WriteLine("Letrec : letrec f x = body in e2  recursive binding (sugar for let f = Y (\\f x. body))");;
     Console.WriteLine("Nums   : 0  42  etc.  converted to Church numerals at parse time");
     Console.WriteLine("Atoms  : S  K  I  B  C  W  Y  <Name>");
     Console.WriteLine("Define : Name = expr            simple definition");
@@ -294,6 +296,7 @@ static void PrintHelp(string? initPath)
     Console.WriteLine("  :help           show this message");
     Console.WriteLine("  Tip: end a line with \\ to continue on the next line");
     Console.WriteLine("  Tip: use Up/Down arrows for history, Tab for completion");
+    Console.WriteLine("  Tip: results are auto-decoded as Bool/Nat/List when possible (shown as Hint)");
     Console.WriteLine("  exit            quit");
     if (initPath is not null)
         Console.WriteLine($"Loaded : {initPath}");
@@ -308,7 +311,9 @@ static void RunLine(string input, Dictionary<string, Expr> env, bool trace, int 
         // But NOT let-expressions, which also contain '='.
         var eqIdx = input.IndexOf('=');
         if (eqIdx > 0 && !input.TrimStart().StartsWith("let ", StringComparison.OrdinalIgnoreCase)
-                      && !input.TrimStart().Equals("let", StringComparison.OrdinalIgnoreCase))
+                      && !input.TrimStart().Equals("let", StringComparison.OrdinalIgnoreCase)
+                      && !input.TrimStart().StartsWith("letrec ", StringComparison.OrdinalIgnoreCase)
+                      && !input.TrimStart().Equals("letrec", StringComparison.OrdinalIgnoreCase))
         {
             var lhsParts = input[..eqIdx].Trim()
                 .Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
@@ -348,6 +353,7 @@ static void RunLine(string input, Dictionary<string, Expr> env, bool trace, int 
         Cwl($"  Parsed : {expr}", ConsoleColor.DarkGray);
         var result = Reducer.Reduce(expr, env, trace ? new ColorWriter(ConsoleColor.DarkGray) : null, maxSteps);
         Cwl($"  Result : {result}", ConsoleColor.Cyan);
+        TryPrintHints(result, env, maxSteps);
     }
     catch (Exception ex)
     {
@@ -454,6 +460,7 @@ static void BenchLine(string input, Dictionary<string, Expr> env, int maxSteps)
         var (result, steps) = Reducer.ReduceWithCount(expr, env, maxSteps);
         sw.Stop();
         Cwl($"  Result : {result}", ConsoleColor.Cyan);
+        TryPrintHints(result, env, maxSteps);
         Cwl($"  Steps  : {steps:N0}  ({sw.ElapsedMilliseconds} ms)", ConsoleColor.DarkGray);
     }
     catch (Exception ex)
@@ -481,6 +488,45 @@ static void SaveEnv(string path, Dictionary<string, Expr> env)
 static bool IsIdent(string s) =>
     s.Length > 0 && char.IsLetter(s[0]) &&
     s.All(c => char.IsLetterOrDigit(c) || c == '_');
+
+/// <summary>After a successful reduction, attempts to decode the result as a Church
+/// boolean, numeral, or list and prints a Hint line for each that matches.</summary>
+static void TryPrintHints(Expr result, Dictionary<string, Expr> env, int maxSteps)
+{
+    // Cap decode budget so hints never noticeably slow down the REPL.
+    const int hintStepCap = 100_000;
+    int steps = Math.Min(maxSteps, hintStepCap);
+    var hints = new List<string>(3);
+
+    try
+    {
+        var b = ChurchBool.Decode(result, env, steps);
+        if (b is true)  hints.Add("Bool TRUE");
+        else if (b is false) hints.Add("Bool FALSE");
+    }
+    catch { }
+
+    try
+    {
+        var n = ChurchNat.Decode(result, env, steps);
+        if (n is not null) hints.Add($"Nat {n}");
+    }
+    catch { }
+
+    if (env.ContainsKey("ISNIL") && env.ContainsKey("HEAD") && env.ContainsKey("TAIL"))
+    {
+        try
+        {
+            var items = SKI.ChurchList.Decode(result, env, steps);
+            if (items is not null)
+                hints.Add($"List [{string.Join(", ", items)}]  (length {items.Count})");
+        }
+        catch { }
+    }
+
+    if (hints.Count > 0)
+        Cwl($"  Hint   : {string.Join("  /  ", hints)}", ConsoleColor.DarkMagenta);
+}
 
 static void Cwl(string text, ConsoleColor color)
 {
@@ -530,7 +576,9 @@ static void LoadFile(string path, Dictionary<string, Expr> env, bool silent, int
             // Exclude let-expressions which also contain '='.
             var eqIdx = line.IndexOf('=');
             if (eqIdx > 0 && !line.StartsWith("let ", StringComparison.OrdinalIgnoreCase)
-                          && !line.Equals("let", StringComparison.OrdinalIgnoreCase))
+                          && !line.Equals("let", StringComparison.OrdinalIgnoreCase)
+                          && !line.StartsWith("letrec ", StringComparison.OrdinalIgnoreCase)
+                          && !line.Equals("letrec", StringComparison.OrdinalIgnoreCase))
             {
                 var lhsParts = line[..eqIdx].Trim()
                     .Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
@@ -653,7 +701,7 @@ namespace SKI
 
     // ── Tokens ────────────────────────────────────────────────────────────────
 
-    enum TokenKind { LParen, RParen, Ident, Lambda, Dot, Number, Let, In, Eq }
+    enum TokenKind { LParen, RParen, Ident, Lambda, Dot, Number, Let, Letrec, In, Eq }
     record Token(TokenKind Kind, string Value, int Position);
 
     // ── Lexer ─────────────────────────────────────────────────────────────────
@@ -688,9 +736,10 @@ namespace SKI
                     var word = source[start..i];
                     var kind = word switch
                     {
-                        "let" => TokenKind.Let,
-                        "in"  => TokenKind.In,
-                        _     => TokenKind.Ident
+                        "let"    => TokenKind.Let,
+                        "letrec" => TokenKind.Letrec,
+                        "in"     => TokenKind.In,
+                        _        => TokenKind.Ident
                     };
                     q.Enqueue(new Token(kind, word, start));
                     continue;
@@ -722,6 +771,7 @@ namespace SKI
                 TokenKind.Lambda  => ParseLambda(tokens, env),
                 TokenKind.Number  => BuildChurchNumeral(int.Parse(tok.Value)),
                 TokenKind.Let     => ParseLet(tokens, env, tok.Position),
+                TokenKind.Letrec  => ParseLetRec(tokens, env, tok.Position),
                 _ => throw new FormatException($"Unexpected token '{tok.Value}' at column {tok.Position + 1}.")
             };
         }
@@ -808,6 +858,46 @@ namespace SKI
             return new App(lambda, e1);
         }
 
+        // letrec f x y = body in e2
+        //   →  (\f. e2) (Y (\f x y. body))
+        // The name is abstracted over the body so Y provides the self-reference.
+        private static Expr ParseLetRec(Queue<Token> tokens, Dictionary<string, Expr> env, int letrecPos)
+        {
+            if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.Ident)
+                throw new FormatException($"Expected name after 'letrec' (column {letrecPos + 1}).");
+            var name = tokens.Dequeue().Value;
+            if (Combinators.IsBuiltin(name))
+                throw new FormatException($"Cannot use built-in '{name}' as a letrec binder.");
+
+            var parms = new List<string>();
+            while (tokens.Count > 0 && tokens.Peek().Kind == TokenKind.Ident)
+            {
+                var p = tokens.Dequeue();
+                if (Combinators.IsBuiltin(p.Value))
+                    throw new FormatException($"Cannot use built-in '{p.Value}' as a parameter.");
+                parms.Add(p.Value);
+            }
+
+            if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.Eq)
+                throw new FormatException($"Expected '=' in letrec binding (near column {letrecPos + 1}).");
+            tokens.Dequeue();
+
+            var e1Raw = Parse(tokens, env);
+
+            // Build \name parms. body  then wrap in Y
+            var allParms = new List<string>(parms.Count + 1) { name };
+            allParms.AddRange(parms);
+            var e1  = BracketAbstract.AbstractAll(allParms, e1Raw);
+            var yE1 = new App(Combinators.Y, e1);
+
+            if (tokens.Count == 0 || tokens.Peek().Kind != TokenKind.In)
+                throw new FormatException($"Expected 'in' after letrec binding (near column {letrecPos + 1}).");
+            tokens.Dequeue();
+
+            var e2     = Parse(tokens, env);
+            var lambda = BracketAbstract.Abstract(name, e2);
+            return new App(lambda, yE1);
+        }
 
         // ZERO = K I,  ONE = I,  n = S B (n-1) for n >= 2.
         // Satisfies: n f x = f^n x  (Church numeral encoding).
