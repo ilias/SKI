@@ -1080,7 +1080,7 @@ namespace SKI
                 if (!Graph.Step(root, env))
                     break;   // normal form reached
                 if (trace is not null)
-                    trace.WriteLine($"  [{step + 1,6}] {Graph.ToExpr(root)}");
+                    trace.WriteLine($"  [{step + 1,6}] {Graph.PrintNode(root)}");  // Perf 3: no ToExpr alloc
             }
             if (step == maxSteps)
                 throw new InvalidOperationException($"Reduction did not terminate after {maxSteps} steps.");
@@ -1164,6 +1164,10 @@ namespace SKI
         // Pool of cached atom nodes indexed by char value (all used chars are within BMP and < 256).
         private static readonly GNode?[] AtomPool = new GNode?[256];
 
+        // Perf 1: reuse the spine list across all Step calls on the same thread.
+        [ThreadStatic]
+        private static List<GNode>? _spine;
+
         public static GNode Atom(char c)
         {
             if (c < 256)
@@ -1172,6 +1176,43 @@ namespace SKI
                 return slot ??= GNode.MakeAtom(c);
             }
             return GNode.MakeAtom(c);
+        }
+
+        // Perf 3: print a graph node directly to a string, avoiding ToExpr + Expr allocation.
+        public static string PrintNode(GNode root)
+        {
+            var sb = new System.Text.StringBuilder();
+            PrintNodeInto(GNode.Deref(root), sb, new HashSet<GNode>(ReferenceEqualityComparer.Instance));
+            return sb.ToString();
+        }
+
+        private static void PrintNodeInto(GNode n, System.Text.StringBuilder sb, HashSet<GNode> visited)
+        {
+            n = GNode.Deref(n);
+            switch (n.Kind)
+            {
+                case GNode.Tag.Atom:
+                    sb.Append(n.AtomName);
+                    return;
+                case GNode.Tag.Name:
+                    sb.Append(n.NameStr);
+                    return;
+                case GNode.Tag.App:
+                    if (!visited.Add(n)) { sb.Append("\u2026"); return; }
+                    // Flatten left-associative spine: collect args, print (f a b c)
+                    var args = new List<GNode>(4);
+                    GNode cur = n;
+                    while (cur.Kind == GNode.Tag.App) { args.Add(GNode.Deref(cur.Arg!)); cur = GNode.Deref(cur.Fun!); }
+                    sb.Append('(');
+                    PrintNodeInto(cur, sb, visited);
+                    for (int i = args.Count - 1; i >= 0; i--) { sb.Append(' '); PrintNodeInto(args[i], sb, visited); }
+                    sb.Append(')');
+                    visited.Remove(n);
+                    return;
+                default:
+                    sb.Append('?');
+                    return;
+            }
         }
 
         /// <summary>Convert an immutable <see cref="Expr"/> tree to a mutable graph.
@@ -1259,8 +1300,9 @@ namespace SKI
         /// </summary>
         public static bool Step(GNode root, Dictionary<string, Expr> env)
         {
-            // spine[0] = topmost App on the way down, spine[last] = nearest App to head
-            var spine = new List<GNode>(16);
+            // Perf 1: reuse the thread-local spine list to avoid per-step allocation.
+            var spine = _spine ??= new List<GNode>(64);
+            spine.Clear();
             var focus = GNode.Deref(root);
 
             // Walk left spine
@@ -1275,9 +1317,9 @@ namespace SKI
             {
                 if (!env.TryGetValue(focus.NameStr!, out var def))
                     return false;   // undefined — stuck
-                var replacement = Build(def, env, new Dictionary<Expr, GNode>(ReferenceEqualityComparer.Instance));
-                // Overwrite the Name node to redirect — but it's shared as an atom,
-                // so overwrite the nearest App's Fun pointer instead, or overwrite focus
+                // Perf 2: env values are plain Expr trees (no DAG sharing), so we don't
+                // need a memo dictionary — use a lightweight stack-based build instead.
+                var replacement = BuildTree(def);
                 focus.Kind    = replacement.Kind;
                 focus.Fun     = replacement.Fun;
                 focus.Arg     = replacement.Arg;
@@ -1399,12 +1441,41 @@ namespace SKI
             if (n.Kind == GNode.Tag.Name)
             {
                 if (!env.TryGetValue(n.NameStr!, out var def)) return false;
-                var rep = Build(def, env, new Dictionary<Expr, GNode>(ReferenceEqualityComparer.Instance));
+                // Perf 2: same as in Step — no memo needed for plain trees.
+                var rep = BuildTree(def);
                 n.Kind = rep.Kind; n.Fun = rep.Fun; n.Arg = rep.Arg;
                 n.AtomName = rep.AtomName; n.NameStr = rep.NameStr; n.Fwd = rep.Fwd;
                 return true;
             }
             return false;
+        }
+
+        /// <summary>Perf 2: lightweight Expr→GNode conversion for plain Expr trees.
+        /// Unlike <see cref="FromExpr"/>, this does not pass <paramref name="env"/> into Build
+        /// since env values never contain NameRef nodes that need immediate inlining.</summary>
+        private static GNode BuildTree(Expr e)
+            => Build(e, null!, new Dictionary<Expr, GNode>(ReferenceEqualityComparer.Instance));
+
+        private static GNode BuildTreeNode(Expr e, Dictionary<Expr, GNode> built)
+        {
+            if (built.TryGetValue(e, out var cached)) return cached;
+            switch (e)
+            {
+                case Combinator c:
+                    return Atom(c.Name);
+                case NameRef(var name):
+                    var nameNode = GNode.MakeName(name);
+                    built[e] = nameNode;
+                    return nameNode;
+                case App(var f, var a):
+                    var node = GNode.MakeApp(null!, null!);
+                    built[e] = node;
+                    node.Fun = BuildTreeNode(f, built);
+                    node.Arg = BuildTreeNode(a, built);
+                    return node;
+                default:
+                    return Atom('?');
+            }
         }
     }
 
@@ -1479,19 +1550,39 @@ namespace SKI
                 !env.TryGetValue("TAIL",  out var tailDef))
                 return null;
 
+            // Perf 4: keep the current list node as a GNode so each iteration re-uses the
+            // already-reduced sub-graph rather than rebuilding from Expr each time.  We only
+            // convert back to Expr when we need to call the Expr-based Reducer methods.
             var items = new List<Expr>();
-            var current = result;
+            GNode currentNode = Graph.FromExpr(result, env);
+
             for (int i = 0; i <= MaxLen; i++)
             {
                 try
                 {
-                    var isNilResult = Reducer.Reduce(new App(isNilDef, current), env, null, maxSteps);
-                    var isNil = ChurchBool.Decode(isNilResult, env, maxSteps);
+                    // Build (ISNIL current) directly from the already-reduced currentNode
+                    var isNilNode = GNode.MakeApp(Graph.FromExpr(isNilDef, env), currentNode);
+                    var isNilRoot = isNilNode;
+                    // Reduce in-place
+                    int s = 0;
+                    for (; s < maxSteps && Graph.Step(isNilRoot, env); s++) { }
+                    var isNilExpr = Graph.ToExpr(isNilRoot);
+                    var isNil = ChurchBool.Decode(isNilExpr, env, maxSteps);
                     if (isNil is true)  return items;
                     if (isNil is not false) return null;
                     if (i == MaxLen) return null;
-                    items.Add(Reducer.Reduce(new App(headDef, current), env, null, maxSteps));
-                    current = Reducer.Reduce(new App(tailDef, current), env, null, maxSteps);
+
+                    // HEAD current
+                    var headNode = GNode.MakeApp(Graph.FromExpr(headDef, env), currentNode);
+                    int hs = 0;
+                    for (; hs < maxSteps && Graph.Step(headNode, env); hs++) { }
+                    items.Add(Graph.ToExpr(headNode));
+
+                    // TAIL current — keep result as GNode for next iteration (Perf 4)
+                    var tailNode = GNode.MakeApp(Graph.FromExpr(tailDef, env), currentNode);
+                    int ts = 0;
+                    for (; ts < maxSteps && Graph.Step(tailNode, env); ts++) { }
+                    currentNode = tailNode;
                 }
                 catch { return null; }
             }
